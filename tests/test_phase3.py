@@ -287,6 +287,10 @@ def test_measured_sources_are_checked_against_the_reference(device_files):
     assert len(problems) == 2, problems
     assert any("PARAMS['h'] = 12.0 but measured:device.bbox_max.z measures 5.0" in p for p in problems)
     assert any("names nothing measurable" in p for p in problems)
+    # untoleranced spec values (fit.0.min, printability.min_wall) are compared too
+    spec2 = normalize({"references": [{"id": "device", "path": str(device_files["stl"])}], "fit": [{"type": "clearance", "ref": "device", "min": 0.5}], "printability": {"min_wall": 1.95}})
+    lr = lint_source('PARAMS = {"c": (0.9, "spec:fit.0.min"), "w": (1.95, "spec:printability.min_wall")}')
+    assert check_sources(lr, spec2) == ["PARAMS['c'] = 0.9 but spec:fit.0.min is 0.5"]
     # a feature reference resolves through the reference's feature report
     code = 'PARAMS = {"slot_w": (4.0, "measured:device.S01.width"), "slot_c": (0.0, "measured:device.S01.center.x")}'
     assert check_sources(lint_source(code), spec) == []

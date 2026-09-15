@@ -258,6 +258,9 @@ def check_sources(result: LintResult, spec: dict, references: dict | None = None
             nom, tol = target
             if abs(float(lit) - nom) > tol + 1e-9:
                 problems.append(f"PARAMS[{name!r}] = {lit} but {src} is {nom} ± {tol}")
+        elif isinstance(target, (int, float)) and not isinstance(target, bool) and isinstance(lit, (int, float)):
+            if abs(float(lit) - float(target)) > 1e-6:  # an untoleranced spec value (fit.0.min, printability.min_wall …)
+                problems.append(f"PARAMS[{name!r}] = {lit} but {src} is {target}")
     result.problems.extend(problems)
     return problems
 

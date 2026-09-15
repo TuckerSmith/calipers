@@ -35,6 +35,10 @@
   `ShapeList` (a naive `.volume` read 0 → booleans now go to OCCT directly); rays cast from a
   reference surface missed a part face touching it (gap read the *next* wall) → rays start 1 µm
   behind the surface; `Shape.intersect` returns `None` for an empty result.
+- Self-review pass (8 adversarial constructions: mesh part vs STEP reference, placed references,
+  swallowed device, tilted part, 45° slots on both paths, two references + bolt keep-out, cwd
+  independence, one-sided tight cavity): all correct. One gap found and fixed: `spec:` sources
+  pointing at untoleranced values (`fit.0.min`, `printability.min_wall`) were not value-compared.
 - Not done (carried to Phase 4): pockets and chamfers as spec features, sphere/cone/torus fits on
   meshes, fillet rings, reference features in `relations`, an independent adversarial review of
   Phase 3 (budget), CADGenBench harness.
