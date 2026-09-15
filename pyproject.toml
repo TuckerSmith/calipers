@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calipers"
+version = "0.1.0"
+description = "Calipers for AI: kernel-exact interrogation, verification and generation of 3D geometry for LLM-driven CAD."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Tucker" }]
+keywords = ["cad", "3d", "llm", "build123d", "occt", "mesh", "geometry", "3d-printing"]
+dependencies = [
+    "build123d>=0.9",
+    "trimesh>=4.4",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "shapely>=2.0",
+    "rtree>=1.1",
+    "networkx>=3.0",
+    "manifold3d>=2.5",
+    "matplotlib>=3.8",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+cadquery = ["cadquery>=2.4"]
+png = ["cairosvg>=2.7"]
+dev = ["pytest>=8", "pytest-timeout>=2.3", "ruff>=0.5"]
+
+[project.scripts]
+calipers = "calipers.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 600
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

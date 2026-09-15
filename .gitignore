@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.log
+out/
+tests/_out/
+# generated artifacts (keep fixtures)
+*.png
+*.svg
+!docs/**/*.png
+!docs/**/*.svg
+# secrets never belong here
+.env
+*.token
