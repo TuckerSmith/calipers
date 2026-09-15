@@ -46,3 +46,7 @@ anyio_mode = "auto"
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+[tool.ruff.lint]
+# pinned so CI and local runs agree whatever ruff version is installed
+select = ["E4", "E7", "E9", "F", "I"]

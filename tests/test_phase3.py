@@ -20,7 +20,7 @@ SLOT_W, SLOT_L, SLOT_D = 4.0, 16.0, 4.0  # a blind slot in its top face, along x
 
 
 def _build_device():
-    from build123d import BuildPart, BuildSketch, Box, Mode, Plane, SlotCenterPoint, extrude
+    from build123d import Box, BuildPart, BuildSketch, Mode, Plane, SlotCenterPoint, extrude
 
     with BuildPart() as bp:
         Box(*DEV)
@@ -130,7 +130,7 @@ def test_slot_spec_contract_and_exact_counts(device_files):
 
 
 def test_patterns_grid_and_bolt_circle(tmp_path):
-    from build123d import BuildPart, Box, Hole, Locations, PolarLocations, export_step
+    from build123d import Box, BuildPart, Hole, Locations, PolarLocations, export_step
 
     with BuildPart() as bp:
         Box(80, 60, 5)
@@ -252,7 +252,7 @@ def test_enclosure_generator_passes_its_own_contracts_unattended(device_files, t
 
 
 def test_mount_generator_measures_holes_and_passes(tmp_path):
-    from build123d import Align, BuildPart, Box, Cylinder, Hole, Locations, export_stl
+    from build123d import Align, Box, BuildPart, Cylinder, Hole, Locations, export_stl
 
     from calipers import generators
     from calipers.sandbox import run_code

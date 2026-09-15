@@ -76,7 +76,19 @@ def _rand_free_spot(rng, taken: list[tuple[float, float, float]], L: float, W: f
 
 def build_recipe(seed: int) -> tuple[object, Recipe]:
     """Build a random part and its ground truth. Returns (build123d Part, Recipe)."""
-    from build123d import Axis, BuildPart, BuildSketch, Box, Cylinder, Location, Locations, Mode, SlotCenterPoint, extrude, fillet
+    from build123d import (
+        Axis,
+        Box,
+        BuildPart,
+        BuildSketch,
+        Cylinder,
+        Location,
+        Locations,
+        Mode,
+        SlotCenterPoint,
+        extrude,
+        fillet,
+    )
 
     rng = np.random.default_rng(seed)
     base = rng.choice(["plate", "plate", "disc", "lbracket", "tube"])

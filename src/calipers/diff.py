@@ -14,8 +14,8 @@ import numpy as np
 
 from calipers import measure
 from calipers.features import extract_features
-from calipers.model import Model
 from calipers.measure import r
+from calipers.model import Model
 
 FULL_KINDS = {"through_hole", "blind_hole", "boss", "shaft", "cylinder", "internal_bore", "hole"}
 

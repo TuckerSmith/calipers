@@ -102,7 +102,7 @@ def test_extra_hole_breaks_symmetry(tmp_path):
 
 
 def test_obb_yaw_of_tall_box_and_axis_aligned_hex(tmp_path):
-    from build123d import RegularPolygon, BuildPart, BuildSketch, extrude
+    from build123d import BuildPart, BuildSketch, RegularPolygon, extrude
 
     _, stl = _both(Box(8, 20, 50).rotate(Axis.Z, 30), tmp_path, "tall")
     obb = measure.summary(load(stl))["oriented_bbox"]
