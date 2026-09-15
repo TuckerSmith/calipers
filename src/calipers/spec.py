@@ -248,7 +248,11 @@ def normalize(spec: dict, base_dir: str | Path | None = None) -> dict:
             raise SpecError(f"duplicate id {rid!r} (reference ids share the namespace with features)")
         nr: dict[str, Any] = {"id": rid, "path": str(rf["path"])}
         if "units" in rf:
-            nr["units"] = str(rf["units"])
+            from calipers.reference import UNIT_SCALE
+
+            if str(rf["units"]).lower() not in UNIT_SCALE:
+                raise SpecError(f"references[{rid}].units: unknown units {rf['units']!r} (choose from {sorted(UNIT_SCALE)})")
+            nr["units"] = str(rf["units"]).lower()
         place = rf.get("place") or {}
         if place:
             rot, tr = place.get("rotate", [0, 0, 0]), place.get("translate", [0, 0, 0])
@@ -283,7 +287,11 @@ def normalize(spec: dict, base_dir: str | Path | None = None) -> dict:
             for name, rng in dirs.items():
                 from calipers.reference import direction_vector
 
-                direction_vector(name)  # validates
+                try:
+                    direction_vector(name)  # validates; vectors are kept in their string form as keys
+                except ValueError as exc:
+                    raise SpecError(f"fit[{i}].directions: {exc}") from exc
+                name = name if isinstance(name, str) else str(list(map(float, name)))
                 if isinstance(rng, (int, float)):
                     rng = [0.0, float(rng)]
                 if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
@@ -292,7 +300,15 @@ def normalize(spec: dict, base_dir: str | Path | None = None) -> dict:
             nf["directions"] = nd
         else:
             nf["min_fraction"] = float(f.get("min_fraction", 0.9))
-            nf["open"] = [str(o) for o in (f.get("open", []) or [])]
+            nf["open"] = []
+            for o in f.get("open", []) or []:
+                from calipers.reference import direction_vector
+
+                try:
+                    direction_vector(o)
+                except ValueError as exc:
+                    raise SpecError(f"fit[{i}].open: {exc}") from exc
+                nf["open"].append(o if isinstance(o, str) else list(map(float, o)))
             nf["max_distance"] = float(f.get("max_distance", 50.0))
         fits.append(nf)
     out["fit"] = fits

@@ -146,6 +146,8 @@ def run_candidates(codes: list[str], spec_path: Optional[str] = None, workdir: O
     from calipers.sandbox import run_candidates as _rc
     from calipers.spec import load_spec
 
+    if not codes:
+        return "no candidates given: pass at least one build123d script"
     ranked = _rc(codes, spec=load_spec(spec_path) if spec_path else None, workdir=workdir, workers=workers)
     return candidates_text(ranked) + "\n\n" + ranked[0][1].to_text()
 

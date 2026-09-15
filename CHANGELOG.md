@@ -44,6 +44,19 @@
   `pyproject.toml` (`E4 E7 E9 F I`), imports sorted. The first green lint then exposed that 3MF
   export needs `lxml` (trimesh's 3MF writer) — added as a dependency. `docs/images/` holds renders of the two
   generated examples (also on the status page for this release).
+- Render: long triangles are split before the painter's depth sort, so a part inside an open box
+  is no longer drawn over the near wall (Tucker spotted the Benchy "outside" its enclosure in the
+  first status renders; the contracts had it inside by exactly wall + clearance on every side).
+- Independent adversarial review of Phase 3 (fresh agent, `docs/review-prompt.md`, 18
+  constructions) found 5 issues, all fixed with regression tests: vector-valued `fit` directions
+  passed `normalize` and crashed `verify`; two parallel, staggered slots were cross-paired into
+  phantom diagonal slots (ends must now open along the line joining them, within 8°); best-of-N with
+  no candidates raised IndexError; a reference's `units` was a label only (now scaled into mm on
+  load: inch/in, cm, m); a Ø0.5 pin through a *non-watertight* reference passed the sampled
+  clearance check (the part's own surface points are now tested against the reference and the
+  check says the overlap is sampled, not a volume). Review notes kept as-is: four holes on a square
+  report as a circular pattern (the bolt-circle test runs first); `region_box(from:)` uses
+  tessellated bounds (5 µm inside the exact bbox).
 - Not done (carried to Phase 4): pockets and chamfers as spec features, sphere/cone/torus fits on
   meshes, fillet rings, reference features in `relations`, an independent adversarial review of
   Phase 3 (budget), CADGenBench harness.

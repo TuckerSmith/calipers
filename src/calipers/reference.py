@@ -35,16 +35,27 @@ VOLUME_TOL = 1e-6  # mm³: exact booleans of touching solids leave slivers far b
 RAY_EPS = 1e-3  # mm: rays start this far behind the reference surface so a touching wall reads as gap 0
 
 
+UNIT_SCALE = {"mm": 1.0, "cm": 10.0, "m": 1000.0, "inch": 25.4, "in": 25.4, "inches": 25.4}
+
+
 def direction_vector(name: Any) -> np.ndarray:
-    """``"+x"`` / ``"-z"`` / ``"y"`` (meaning +y) / a 3-vector → unit vector."""
+    """``"+x"`` / ``"-z"`` / ``"y"`` (meaning +y) / a 3-vector (or its string form) → unit vector."""
     if isinstance(name, str):
         key = name.strip().lower()
         if key in {"x", "y", "z"}:
             key = "+" + key
-        if key not in DIRECTIONS:
-            raise ValueError(f"unknown direction {name!r} (use +x, -x, +y, -y, +z, -z or a vector)")
-        return np.asarray(DIRECTIONS[key], dtype=float)
-    return unit(np.asarray(name, dtype=float))
+        if key in DIRECTIONS:
+            return np.asarray(DIRECTIONS[key], dtype=float)
+        try:  # a vector written as text, e.g. "[1, 0, 0]" (spec keys are strings)
+            import ast
+
+            name = ast.literal_eval(name)
+        except Exception as exc:
+            raise ValueError(f"unknown direction {name!r} (use +x, -x, +y, -y, +z, -z or a 3-vector)") from exc
+    v = np.asarray(name, dtype=float)
+    if v.shape != (3,) or not np.linalg.norm(v) > 0:
+        raise ValueError(f"bad direction {name!r}: need a non-zero 3-vector")
+    return unit(v)
 
 
 # ----------------------------------------------------------------------------- loading & placing
@@ -53,7 +64,13 @@ def load_reference(ref: dict, base_dir: Optional[str | Path] = None) -> Model:
     path = Path(ref["path"])
     if not path.is_absolute() and base_dir is not None:
         path = Path(base_dir) / path
-    model = Model.load(path, units=ref.get("units", "mm"))
+    units = str(ref.get("units", "mm")).lower()
+    if units not in UNIT_SCALE:
+        raise ValueError(f"reference {ref['id']!r}: unknown units {units!r} (choose from {sorted(UNIT_SCALE)})")
+    model = Model.load(path, units="mm")
+    if UNIT_SCALE[units] != 1.0:  # bring the reference into the spec's millimetre frame
+        model = scale_model(model, UNIT_SCALE[units])
+        model.notes.append(f"reference scaled ×{UNIT_SCALE[units]} from {units} to mm")
     place = ref.get("place") or {}
     rot = place.get("rotate", [0.0, 0.0, 0.0])
     tr = place.get("translate", [0.0, 0.0, 0.0])
@@ -62,6 +79,18 @@ def load_reference(ref: dict, base_dir: Optional[str | Path] = None) -> Model:
         model.notes.append(f"placed: rotate {list(map(float, rot))}° about x, y, z then translate {list(map(float, tr))}")
     model.name = ref["id"]
     return model
+
+
+def scale_model(model: Model, factor: float) -> Model:
+    if model.is_exact:
+        out = Model.from_shape(model.shape.scale(float(factor)), name=model.name, source_path=model.source_path)
+    else:
+        mesh = model.mesh.copy()
+        mesh.apply_scale(float(factor))
+        out = Model.from_mesh(mesh, name=model.name, source_path=model.source_path)
+    out.units = "mm"
+    out.notes = list(model.notes)
+    return out
 
 
 def place_model(model: Model, rotate_deg=(0.0, 0.0, 0.0), translate=(0.0, 0.0, 0.0)) -> Model:
@@ -251,6 +280,14 @@ def clearance(model: Model, ref: Model) -> dict:
         out["reference_points_inside_part"] = int(inside.sum())
         out["reference_points_checked"] = int(len(rp))
     pp, _ = _surface_samples(model)
+    if vol is None:  # open reference: a thin intrusion can slip between its surface samples, so also
+        # test the part's own surface points against the reference (nearest-face signed distance)
+        if rm.is_winding_consistent:
+            with np.errstate(invalid="ignore", divide="ignore"):
+                sd = trimesh.proximity.signed_distance(rm, pp)
+            out["part_points_inside_reference"] = int((sd > 1e-6).sum())
+            out["part_points_checked"] = int(len(pp))
+        out["note_overlap"] = "reference mesh is not closed: overlap is sampled both ways, not a volume; add keep_out: {from: <ref>} for a hard guarantee"
     with np.errstate(invalid="ignore", divide="ignore"):
         _, d1, _ = trimesh.proximity.closest_point(pm, rp)
         _, d2, _ = trimesh.proximity.closest_point(rm, pp)
@@ -262,7 +299,7 @@ def clearance(model: Model, ref: Model) -> dict:
 def overlaps(c: dict) -> bool:
     if c.get("overlap_volume") is not None and c["overlap_volume"] > VOLUME_TOL:
         return True
-    return c.get("reference_points_inside_part", 0) > 0
+    return c.get("reference_points_inside_part", 0) > 0 or c.get("part_points_inside_reference", 0) > 0
 
 
 def directional_gaps(model: Model, ref: Model, directions: list[np.ndarray], max_distance: float = 1e4) -> list[dict]:

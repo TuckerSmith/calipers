@@ -61,7 +61,7 @@ unattended end-to-end case.
 After each phase, a separate agent — with no stake in the code — is given the modules and this
 instruction: *"Construct parts that break it. Report only what you reproduced, with the
 construction, observed vs expected, and a proposed fix."* Its findings become regression tests
-(section 1) before the fixes are considered done. Phase 1's review found 12 real issues; the rate at
+(section 1) before the fixes are considered done. Phase 1's review found 12 real issues, Phase 2's 12, Phase 3's 5; the rate at
 which a fresh reviewer finds new ones is the project's real quality metric. Suggested cadence: one
 review per phase, plus one whenever the geometry math changes.
 

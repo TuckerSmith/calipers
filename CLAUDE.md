@@ -80,7 +80,11 @@ workflow end to end: it writes the sourced script + spec and runs the loop; `exa
 is the exit-criterion demo. Gap semantics: rays from reference-surface samples whose outward normal
 faces the direction, nearest part hit, *minimum* over samples (the tight spot); a direction with < 50 %
 hits is "unconstrained" and fails. Slots are paired half-cylinders (≈180°, same radius, facing away);
-their ends are re-labelled `slot_end` so they never count as loose partials.
+their ends are re-labelled `slot_end` so they never count as loose partials, and the ends must open
+along the line joining them (±8°) so staggered parallel slots are not cross-paired. Reference `units`
+(inch/in, cm, m) are scaled into mm on load. Patterns: four features on a square read as `circular`
+(the bolt-circle test runs before the grid test). A non-watertight reference makes overlap a sampled
+check both ways; specs wanting a hard guarantee add `keep_out: {from: <ref>}` (the generators do).
 
 ## How the mesh feature path works (the non-obvious part)
 
@@ -125,9 +129,8 @@ embree ray casting, a compiled RANSAC scorer, skipping RANSAC on regions with no
   adversarial review; end-to-end unattended demo passed.
 - Phase 3 (done, 0.3.0): references, keep-in/keep-out, fit contracts, enclosure & mount generators,
   slots in specs and both feature paths, pattern grouping, best-of-N, version diff, sandbox limits.
-  Not done: pockets/chamfers as spec features, sphere/cone/torus fits, fillet rings, reference
-  features in `relations`, and — because the session ran on a fixed credit budget — the
-  independent adversarial review of Phase 3. **Next decision for Tucker:** run that review
-  (`docs/review-prompt.md`, modules reference/generators/diff/contracts/features-slots) before
-  building on Phase 3, or accept the ground-truth tests + red team as sufficient for now.
+  Independent adversarial review done (5 findings, all fixed with regression tests; Phase 1: 12,
+  Phase 2: 12, Phase 3: 5). Not done: pockets/chamfers as spec features, sphere/cone/torus fits,
+  fillet rings, reference features in `relations`. **Next decision for Tucker:** Phase 4 order —
+  the benchmark harness first (progress becomes a number) or the missing geometry first.
 - Phase 4: evaluation harness (CADGenBench, CADTestBench, own parts), docs, FreeCAD handoff polish.

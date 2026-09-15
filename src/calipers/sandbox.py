@@ -272,6 +272,8 @@ def run_candidates(codes: list[str], spec: Optional[dict] = None, workdir: str |
     the judge; the generator that produced the candidates is expected to be wrong in places."""
     from concurrent.futures import ThreadPoolExecutor
 
+    if not codes:
+        raise ValueError("at least one candidate script is required")
     base = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="calipers_best_"))
     kw.setdefault("diff_previous", False)
 
@@ -285,6 +287,8 @@ def run_candidates(codes: list[str], spec: Optional[dict] = None, workdir: str |
 
 
 def candidates_text(ranked: list[tuple[int, RunResult]]) -> str:
+    if not ranked:
+        return "# Best-of-0: no candidates given"
     lines = [f"# Best-of-{len(ranked)}: candidate {ranked[0][0]} is best" + (" and passes everything" if ranked[0][1].passed else " but does not pass yet")]
     for i, res in ranked:
         sc = res.score()
