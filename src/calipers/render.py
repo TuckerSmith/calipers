@@ -55,12 +55,33 @@ def _decimated(mesh):
         return mesh
 
 
+MAX_EDGE_FRACTION = 0.03  # of the bbox diagonal: longer triangles are split before depth sorting
+
+
+def _painter_ready(mesh):
+    """Split long triangles so a painter's sort by centroid depth cannot draw a far object over a
+    near wall (a 60 mm wall face is two triangles whose centroids sit *behind* a part inside the box)."""
+    import trimesh
+
+    max_edge = MAX_EDGE_FRACTION * float(np.linalg.norm(mesh.extents))
+    edges = mesh.vertices[mesh.edges_unique]
+    if max_edge <= 0 or np.linalg.norm(edges[:, 0] - edges[:, 1], axis=1).max() <= max_edge:
+        return mesh
+    try:
+        v, f = trimesh.remesh.subdivide_to_size(mesh.vertices, mesh.faces, max_edge=max_edge, max_iter=6)
+    except Exception:
+        return mesh
+    if len(f) > 4 * MAX_RENDER_FACES:
+        return mesh
+    return trimesh.Trimesh(vertices=v, faces=f, process=False)
+
+
 def render_view(model: Model, view: str, out_path: str | os.PathLike, size_px: int = 900, title: Optional[str] = None) -> str:
     """Shaded orthographic view of the model's mesh, saved as PNG. Returns the path."""
     if view not in VIEWS:
         raise ValueError(f"unknown view {view!r}; choose from {sorted(VIEWS)}")
     cam, up, label = VIEWS[view]
-    mesh = _decimated(model.mesh)
+    mesh = _painter_ready(_decimated(model.mesh))
     x, y, z = _camera(cam, up)
     tri = np.asarray(mesh.triangles)  # (n, 3, 3)
     n = np.asarray(mesh.face_normals)

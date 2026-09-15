@@ -44,6 +44,9 @@
   `pyproject.toml` (`E4 E7 E9 F I`), imports sorted. The first green lint then exposed that 3MF
   export needs `lxml` (trimesh's 3MF writer) — added as a dependency. `docs/images/` holds renders of the two
   generated examples (also on the status page for this release).
+- Render: long triangles are split before the painter's depth sort, so a part inside an open box
+  is no longer drawn over the near wall (Tucker spotted the Benchy "outside" its enclosure in the
+  first status renders; the contracts had it inside by exactly wall + clearance on every side).
 - Not done (carried to Phase 4): pockets and chamfers as spec features, sphere/cone/torus fits on
   meshes, fillet rings, reference features in `relations`, an independent adversarial review of
   Phase 3 (budget), CADGenBench harness.

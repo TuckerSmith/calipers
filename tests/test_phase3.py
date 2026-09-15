@@ -375,3 +375,19 @@ def test_benchy_enclosure_exit_criterion(benchy_file, tmp_path):
     assert abs(by["envelope.x"]["measured"] - (60.0 + 1.2 + 4.0)) < 0.3 and abs(by["envelope.y"]["measured"] - (31.0 + 1.2 + 4.0)) < 0.3 and abs(by["envelope.z"]["measured"] - (48.0 + 1.2 + 2.0)) < 0.3
     assert abs(by["fit.0.clearance.min_distance"]["measured"] - 0.6) < 0.01
     assert by["fit.2.enclosed"]["measured"] >= 0.95
+
+
+def test_render_splits_long_triangles_before_painter_sort():
+    """Review finding (Tucker, 15 Sep): the Benchy looked as if it poked through the enclosure wall.
+    The geometry was fine (contracts exact); the painter's sort used triangle centroids, and a 60 mm
+    wall face is two triangles whose centroids sit behind the boat. Long edges are now split first."""
+    import trimesh
+
+    from calipers.render import MAX_EDGE_FRACTION, _painter_ready
+
+    box = trimesh.creation.box(extents=(60, 40, 50))
+    ready = _painter_ready(box)
+    edges = ready.vertices[ready.edges_unique]
+    longest = float(np.linalg.norm(edges[:, 0] - edges[:, 1], axis=1).max())
+    assert longest <= MAX_EDGE_FRACTION * float(np.linalg.norm(box.extents)) + 1e-9
+    assert abs(ready.volume - box.volume) < 1e-6 and ready.is_watertight
