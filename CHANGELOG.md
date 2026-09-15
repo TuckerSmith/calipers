@@ -41,7 +41,8 @@
   pointing at untoleranced values (`fit.0.min`, `printability.min_wall`) were not value-compared.
 - CI: the GitHub Actions lint step had been red since the Phase 1 push (ruff's default rule set
   drifted; 210 import-order findings), so the test jobs never ran. Rule set pinned in
-  `pyproject.toml` (`E4 E7 E9 F I`), imports sorted. `docs/images/` holds renders of the two
+  `pyproject.toml` (`E4 E7 E9 F I`), imports sorted. The first green lint then exposed that 3MF
+  export needs `lxml` (trimesh's 3MF writer) — added as a dependency. `docs/images/` holds renders of the two
   generated examples (also on the status page for this release).
 - Not done (carried to Phase 4): pockets and chamfers as spec features, sphere/cone/torus fits on
   meshes, fillet rings, reference features in `relations`, an independent adversarial review of
