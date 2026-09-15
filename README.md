@@ -129,7 +129,11 @@ fit:
 build123d script whose numbers cite the reference (`measured:device.bbox_max.z`) and the spec above,
 then runs it; `generate mount` puts standoffs at the reference's measured through holes.
 `examples/benchy_enclosure` is the 3DBenchy (an organic, non-watertight mesh) in a printed enclosure:
-generated and verified with no human in the loop, 16/16 contracts. Specs also take `kind: slot`
+generated and verified with no human in the loop, 16/16 contracts.
+
+| ![Benchy inside the generated enclosure](docs/images/benchy_in_enclosure_iso.png) | ![Section at y=0](docs/images/benchy_section_y0.png) |
+|---|---|
+| ![Board on the generated mount](docs/images/board_on_mount_iso.png) | ![Section through a standoff](docs/images/mount_section_x-22.png) | Specs also take `kind: slot`
 features, and the report groups grids / lines / bolt circles of identical features.
 
 ## Roadmap
