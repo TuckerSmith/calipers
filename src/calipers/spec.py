@@ -46,6 +46,28 @@ Minimal example::
       - {type: coaxial, between: [boss.0, center_hole.0], tol: 0.05}
     symmetry: [x, y]            # mirror planes (world axes) the part must have
     printability: {min_wall: 1.2, bed: [256, 256, 256]}
+
+Slots are features too: ``kind: slot`` with ``width`` (the diameter of the rounded ends), ``length``
+(overall, end to end), ``direction`` (the long side, ⟂ axis) and ``depth``; ``exact_counts`` covers
+cylindrical features *and* slots.
+
+Reference-conditioned design (Phase 3) — design around an imported part::
+
+    references:
+      - {id: device, path: device.stl, place: {rotate: [0, 0, 0], translate: [0, 0, 0]}}
+    keep_out:                       # the part must have no material here
+      - {id: usb, from: device, face: "+x", depth: 20, pad: 1}    # box in front of the device's +x face
+      - {id: lid, box: {min: [-40, -30, 20], max: [40, 30, 30]}}
+      - {id: screw, cylinder: {from: [0, 0, -5], to: [0, 0, 5], radius: 1.6}}
+    keep_in:                        # all material must be inside
+      - {id: bed, box: {center: [0, 0, 50], size: [250, 250, 100]}}
+    fit:
+      - {type: clearance, ref: device, min: 0.3}              # no overlap; closest approach >= 0.3
+      - {type: gap, ref: device, directions: {"+x": [0.3, 1.0], "-x": [0.3, 1.0], "-z": [0, 0.5]}}
+      - {type: enclosed, ref: device, min_fraction: 0.85, open: ["+z"]}
+
+Reference paths are relative to the spec file. Generated code may cite ``measured:device.bbox_max.z``
+(and ``extents.x``, ``center.y``, ``C03.diameter`` …) — those values are checked against the reference.
 """
 
 from __future__ import annotations
@@ -57,7 +79,8 @@ from typing import Any, Sequence
 import numpy as np
 
 AXES = {"x": [1.0, 0.0, 0.0], "y": [0.0, 1.0, 0.0], "z": [0.0, 0.0, 1.0]}
-FEATURE_KINDS = {"through_hole", "blind_hole", "boss", "shaft", "cylinder", "internal_bore", "hole"}
+FEATURE_KINDS = {"through_hole", "blind_hole", "boss", "shaft", "cylinder", "internal_bore", "hole", "slot"}
+FIT_TYPES = {"clearance", "gap", "enclosed"}
 
 
 class SpecError(ValueError):
@@ -73,7 +96,7 @@ def load_spec(path: str | Path) -> dict:
         spec = yaml.safe_load(text)
     else:
         spec = json.loads(text)
-    return normalize(spec)
+    return normalize(spec, base_dir=p.parent)
 
 
 def toleranced(v: Any, default_tol: float = 0.05, where: str = "") -> tuple[float, float]:
@@ -101,11 +124,14 @@ def axis_vector(a: Any) -> np.ndarray:
     return v / n
 
 
-def normalize(spec: dict) -> dict:
-    """Validate and fill defaults. Raises SpecError with a precise message on problems."""
+def normalize(spec: dict, base_dir: str | Path | None = None) -> dict:
+    """Validate and fill defaults. Raises SpecError with a precise message on problems.
+
+    ``base_dir`` is where relative reference paths resolve (the spec file's folder)."""
     if not isinstance(spec, dict):
         raise SpecError("spec must be a mapping")
     out: dict[str, Any] = {"part": spec.get("part", "part"), "units": spec.get("units", "mm")}
+    out["_base_dir"] = str(base_dir) if base_dir is not None else spec.get("_base_dir")
     env = spec.get("envelope", {}) or {}
     out["envelope"] = {}
     if "extents" in env:
@@ -139,9 +165,21 @@ def normalize(spec: dict) -> dict:
         nf: dict[str, Any] = {"id": fid, "kind": f["kind"], "axis": axis_vector(f.get("axis", "z")).tolist()}
         if "diameter" in f:
             nf["diameter"] = toleranced(f["diameter"], where=f"{fid}.diameter")
-        for key in ("length", "height", "depth"):
-            if key in f:
-                nf["length"] = toleranced(f[key], where=f"{fid}.{key}")
+        if f["kind"] == "slot":
+            if "width" not in f:
+                raise SpecError(f"feature {fid}: a slot needs a width (the diameter of its rounded ends)")
+            nf["width"] = toleranced(f["width"], where=f"{fid}.width")
+            if "length" in f:
+                nf["slot_length"] = toleranced(f["length"], where=f"{fid}.length")  # overall, end to end
+            if "depth" in f:
+                nf["length"] = toleranced(f["depth"], where=f"{fid}.depth")
+            nf["direction"] = axis_vector(f.get("direction", "x")).tolist()  # along the slot's long side
+            if abs(float(np.dot(nf["direction"], nf["axis"]))) > 1e-6:
+                raise SpecError(f"feature {fid}: slot direction must be perpendicular to its axis")
+        else:
+            for key in ("length", "height", "depth"):
+                if key in f:
+                    nf["length"] = toleranced(f[key], where=f"{fid}.{key}")
         if "entry" in f:
             if str(f["entry"]) not in {"+", "-"}:
                 raise SpecError(f"feature {fid}: entry must be '+' or '-' (the open end relative to the axis direction)")
@@ -200,6 +238,104 @@ def normalize(spec: dict) -> dict:
         out["printability"]["min_wall"] = float(pr["min_wall"])
     if "bed" in pr:
         out["printability"]["bed"] = list(map(float, pr["bed"]))
+    # ---- references, regions, fit (Phase 3)
+    refs = []
+    for i, rf in enumerate(spec.get("references", []) or []):
+        if not isinstance(rf, dict) or "path" not in rf:
+            raise SpecError(f"references[{i}] needs a path (STL/OBJ/3MF/STEP)")
+        rid = str(rf.get("id", Path(rf["path"]).stem))
+        if rid in ids or any(x["id"] == rid for x in refs):
+            raise SpecError(f"duplicate id {rid!r} (reference ids share the namespace with features)")
+        nr: dict[str, Any] = {"id": rid, "path": str(rf["path"])}
+        if "units" in rf:
+            nr["units"] = str(rf["units"])
+        place = rf.get("place") or {}
+        if place:
+            rot, tr = place.get("rotate", [0, 0, 0]), place.get("translate", [0, 0, 0])
+            if len(rot) != 3 or len(tr) != 3:
+                raise SpecError(f"references[{rid}].place: rotate and translate need 3 values each")
+            nr["place"] = {"rotate": list(map(float, rot)), "translate": list(map(float, tr))}
+        refs.append(nr)
+    out["references"] = refs
+    ref_ids = {x["id"] for x in refs}
+    for mode in ("keep_out", "keep_in"):
+        regions = []
+        for i, reg in enumerate(spec.get(mode, []) or []):
+            regions.append(_normalize_region(reg, ref_ids, f"{mode}[{i}]", i))
+        out[mode] = regions
+    fits = []
+    for i, f in enumerate(spec.get("fit", []) or []):
+        t = f.get("type")
+        if t not in FIT_TYPES:
+            raise SpecError(f"fit[{i}]: unknown type {t!r} (choose from {sorted(FIT_TYPES)})")
+        if f.get("ref") not in ref_ids:
+            raise SpecError(f"fit[{i}]: 'ref' must name a reference id (known: {sorted(ref_ids)})")
+        nf = {"type": t, "ref": str(f["ref"])}
+        if t == "clearance":
+            nf["min"] = float(f.get("min", 0.0))
+            if "max" in f:
+                nf["max"] = float(f["max"])
+        elif t == "gap":
+            dirs = f.get("directions")
+            if not isinstance(dirs, dict) or not dirs:
+                raise SpecError(f"fit[{i}]: gap needs directions like {{'-z': [0, 0.5], '+x': [0.3, 1.0]}}")
+            nd = {}
+            for name, rng in dirs.items():
+                from calipers.reference import direction_vector
+
+                direction_vector(name)  # validates
+                if isinstance(rng, (int, float)):
+                    rng = [0.0, float(rng)]
+                if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
+                    raise SpecError(f"fit[{i}].directions[{name!r}]: give [min, max] gap in mm")
+                nd[str(name)] = (float(rng[0]), float(rng[1]))
+            nf["directions"] = nd
+        else:
+            nf["min_fraction"] = float(f.get("min_fraction", 0.9))
+            nf["open"] = [str(o) for o in (f.get("open", []) or [])]
+            nf["max_distance"] = float(f.get("max_distance", 50.0))
+        fits.append(nf)
+    out["fit"] = fits
+    return out
+
+
+def _normalize_region(reg: Any, ref_ids: set[str], where: str, index: int) -> dict:
+    if not isinstance(reg, dict):
+        raise SpecError(f"{where}: must be a mapping")
+    kinds = [k for k in ("box", "cylinder", "from") if k in reg]
+    if len(kinds) != 1:
+        raise SpecError(f"{where}: give exactly one of box:, cylinder: or from: <reference id>")
+    out: dict[str, Any] = {"id": str(reg.get("id", f"region_{index}"))}
+    if "box" in reg:
+        b = reg["box"]
+        if isinstance(b, dict) and "min" in b and "max" in b:
+            lo, hi = list(map(float, b["min"])), list(map(float, b["max"]))
+            if len(lo) != 3 or len(hi) != 3 or any(h < lo_ for h, lo_ in zip(hi, lo)):
+                raise SpecError(f"{where}.box: min/max need 3 values with max >= min")
+            out["box"] = {"min": lo, "max": hi}
+        elif isinstance(b, dict) and "center" in b and "size" in b:
+            out["box"] = {"center": list(map(float, b["center"])), "size": list(map(float, b["size"]))}
+        else:
+            raise SpecError(f"{where}.box: use {{min: [..], max: [..]}} or {{center: [..], size: [..]}}")
+    elif "cylinder" in reg:
+        c = reg["cylinder"]
+        try:
+            out["cylinder"] = {"from": list(map(float, c["from"])), "to": list(map(float, c["to"])), "radius": float(c["radius"])}
+        except (KeyError, TypeError) as exc:
+            raise SpecError(f"{where}.cylinder: needs from: [x,y,z], to: [x,y,z], radius") from exc
+    else:
+        if reg["from"] not in ref_ids:
+            raise SpecError(f"{where}: from: {reg['from']!r} is not a reference id (known: {sorted(ref_ids)})")
+        out["from"] = str(reg["from"])
+        out["pad"] = float(reg.get("pad", 0.0))
+        if "face" in reg:
+            from calipers.reference import direction_vector
+
+            direction_vector(reg["face"])
+            if "depth" not in reg:
+                raise SpecError(f"{where}: a face: region needs depth: (how far out from that face)")
+            out["face"] = str(reg["face"])
+            out["depth"] = float(reg["depth"])
     return out
 
 

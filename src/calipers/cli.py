@@ -1,4 +1,4 @@
-"""Command-line interface: ``calipers report|features|section|render|summary|export``."""
+"""Command-line interface: ``calipers report|features|section|render|summary|export|verify|lint|run|best|diff|generate|api|redteam``."""
 
 from __future__ import annotations
 
@@ -158,6 +158,83 @@ def run(
     typer.echo(res.to_text())
     ok = res.ok and (res.verify is None or res.verify["passed"]) and (res.lint is None or res.lint.get("ok", True))
     raise typer.Exit(code=0 if ok else 1)
+
+
+@app.command()
+def best(
+    codes: list[Path] = typer.Argument(..., exists=True, help="candidate build123d scripts"),
+    spec: Optional[Path] = typer.Option(None, "--spec", "-s", exists=True),
+    out_dir: Optional[Path] = typer.Option(None, "--out", "-o", help="Where candidate_<i>/result.step land"),
+    workers: int = typer.Option(4, help="parallel subprocesses"),
+    full: bool = typer.Option(False, help="Print the best candidate's full run output too"),
+):
+    """Best-of-N: run several candidate scripts, verify each, rank them (the verifier is the judge)."""
+    from calipers.sandbox import candidates_text, run_candidates
+    from calipers.spec import load_spec
+
+    ranked = run_candidates([c.read_text(encoding="utf-8") for c in codes], spec=load_spec(spec) if spec else None, workdir=out_dir, workers=workers)
+    typer.echo(candidates_text(ranked))
+    for i, r in ranked:
+        typer.echo(f"  candidate {i} = {codes[i]}")
+    if full:
+        typer.echo("")
+        typer.echo(ranked[0][1].to_text())
+    raise typer.Exit(code=0 if ranked[0][1].passed else 1)
+
+
+@app.command()
+def diff(a: Path = typer.Argument(..., exists=True), b: Path = typer.Argument(..., exists=True), json_out: Optional[Path] = typer.Option(None, "--json")):
+    """What changed between two models: extents, volume, planes, cylindrical features, slots (exact for STEP vs STEP)."""
+    from calipers.diff import diff_models, diff_text
+
+    d = diff_models(load(a), load(b))
+    if json_out:
+        json_out.write_text(json.dumps(d, indent=2, default=str))
+    typer.echo(diff_text(d))
+
+
+@app.command()
+def generate(
+    kind: str = typer.Argument(..., help="enclosure | mount"),
+    reference: Path = typer.Option(..., "--ref", "-r", exists=True, help="reference model (STL/OBJ/3MF/STEP)"),
+    out_dir: Path = typer.Option(Path("generated"), "--out", "-o", help="where part.py and spec.yaml are written"),
+    ref_id: Optional[str] = typer.Option(None, help="reference id used in the spec and in measured: sources"),
+    wall: float = typer.Option(2.0, help="enclosure wall thickness"),
+    clearance: float = typer.Option(0.5, help="enclosure: gap between the reference and the cavity"),
+    floor: Optional[float] = typer.Option(None, help="enclosure: floor thickness (default: wall)"),
+    open_face: str = typer.Option("+z", "--open", help="enclosure: the open face (+x -x +y -y +z -z)"),
+    corner_radius: float = typer.Option(0.0, help="enclosure: outer corner radius"),
+    plate_t: float = typer.Option(3.0, help="mount: plate thickness"),
+    standoff_h: float = typer.Option(5.0, help="mount: standoff height under the reference"),
+    standoff_wall: float = typer.Option(2.0, help="mount: standoff wall around the screw hole"),
+    screw_d: Optional[float] = typer.Option(None, help="mount: screw hole diameter (default 0.85 × reference hole)"),
+    margin: float = typer.Option(3.0, help="mount: plate margin around the reference footprint"),
+    hole_diameter: Optional[float] = typer.Option(None, help="mount: which reference hole size to use"),
+    rotate: Optional[str] = typer.Option(None, help="place the reference: rotation about x,y,z in degrees, e.g. '90,0,0'"),
+    translate: Optional[str] = typer.Option(None, help="place the reference: translation, e.g. '0,0,10'"),
+    run: bool = typer.Option(True, help="run and verify the generated part right away"),
+):
+    """Generate a sourced build123d script + spec for a part designed around a reference model, then verify it."""
+    from calipers import generators
+
+    place = None
+    if rotate or translate:
+        place = {"rotate": [float(v) for v in (rotate or "0,0,0").split(",")], "translate": [float(v) for v in (translate or "0,0,0").split(",")]}
+    if kind == "enclosure":
+        res = generators.enclosure(reference, ref_id, wall=wall, clearance=clearance, floor=floor, open_face=open_face, corner_radius=corner_radius, place=place, out_dir=out_dir)
+    elif kind == "mount":
+        res = generators.mount(reference, ref_id, plate_t=plate_t, standoff_h=standoff_h, standoff_wall=standoff_wall, screw_d=screw_d, margin=margin, hole_diameter=hole_diameter, place=place, out_dir=out_dir)
+    else:
+        raise typer.BadParameter("kind must be 'enclosure' or 'mount'")
+    typer.echo(f"wrote {res['paths']['code']} and {res['paths']['spec']}", err=True)
+    if not run:
+        return
+    from calipers.sandbox import run_code
+    from calipers.spec import load_spec
+
+    rr = run_code(res["code"], workdir=out_dir / "run", spec=load_spec(res["paths"]["spec"]))
+    typer.echo(rr.to_text())
+    raise typer.Exit(code=0 if rr.passed else 1)
 
 
 @app.command()

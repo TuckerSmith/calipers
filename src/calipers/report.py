@@ -120,11 +120,21 @@ class GeometryReport:
             out.append(f"- {g['count']}× {g['kind']} Ø{g['diameter']:.3f} × {g['height']:.3f} long — axis mid-points: {pts}{more}")
         if len(groups) > max_groups:
             out.append(f"- … {len(groups) - max_groups} more groups (see JSON)")
-        partial = [x for x in cyls if x["kind"] in {"partial", "fillet_candidate"}]
+        for pat in f.get("patterns", []):
+            if pat["type"] == "circular":
+                out.append(f"- pattern: {pat['count']}× {pat['kind']} Ø{pat['diameter']:.3f} on a circle of radius {pat['pitch_radius']:.3f} centred ({_fmt3(pat['center'], ', ')}), pitch {pat['angular_pitch_deg']}° ({', '.join(pat['ids'])})")
+            elif pat["type"] == "linear":
+                out.append(f"- pattern: {pat['count']}× {pat['kind']} Ø{pat['diameter']:.3f} in a line along ({_fmt3(pat['direction'], ', ')}), pitch {pat['pitch']:.3f} ({', '.join(pat['ids'])})")
+            else:
+                out.append(f"- pattern: {pat['rows']}×{pat['cols']} grid of {pat['kind']} Ø{pat['diameter']:.3f}, pitch {pat['pitch'][0]:.3f} × {pat['pitch'][1]:.3f} ({', '.join(pat['ids'])})")
+        for sl in f.get("slots", []):
+            fit = "" if sl["exact"] else f", fit rms {sl['fit_rms']:.4f}"
+            out.append(f"- {sl['id']} {sl['kind']}: width {sl['width']:.3f} × length {sl['length']:.3f}, depth {sl['depth']:.3f}, centre ({_fmt3(sl['center'], ', ')}), along ({_fmt3(sl['direction'], ', ')}), axis ({_fmt3(sl['axis_dir'], ', ')}){fit}")
+        partial = [x for x in cyls if x["kind"] in {"partial", "fillet_candidate", "slot_end"}]
         if partial:
             radii = sorted({round(x["radius"], 2) for x in partial})
             out.append(f"- partial cylinders / fillet candidates: {len(partial)} with radii {radii[:10]}")
-        listed = [x for x in cyls if x["kind"] not in {"partial", "fillet_candidate"}][:max_cyls]
+        listed = [x for x in cyls if x["kind"] not in {"partial", "fillet_candidate", "slot_end"}][:max_cyls]
         if listed:
             out.append("  Detail (first %d): " % len(listed))
             for x in listed:

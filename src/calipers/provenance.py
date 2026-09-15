@@ -210,8 +210,12 @@ def lint_file(path: str) -> LintResult:
         return lint_source(f.read())
 
 
-def check_sources(result: LintResult, spec: dict) -> list[str]:
-    """Resolve every ``spec:`` source in a lint result against a normalized spec.
+MEASURED_TOL = 0.05  # mm: a cited measurement may be rounded, not changed
+
+
+def check_sources(result: LintResult, spec: dict, references: dict | None = None) -> list[str]:
+    """Resolve every ``spec:`` source in a lint result against a normalized spec, and every
+    ``measured:<reference id>.<path>`` source against the loaded reference model.
 
     Returns problems: sources that name nothing in the spec, and literal PARAMS values that disagree
     with the nominal the source points at (outside its tolerance). Appended to ``result.problems``.
@@ -219,7 +223,25 @@ def check_sources(result: LintResult, spec: dict) -> list[str]:
     import ast as _ast
 
     problems: list[str] = []
+    ref_ids = {rf["id"] for rf in spec.get("references", [])}
+    ref_cache: dict[str, dict] = {}
     for name, (value_repr, src) in result.params.items():
+        if src and src.startswith("measured:") and ref_ids:
+            path = src[len("measured:"):].strip()
+            rid, _, rest = path.replace("#", ".").partition(".")
+            if rid not in ref_ids:
+                continue  # a free-form measurement note (e.g. from calipers on the bench)
+            target = _resolve_measured(rid, rest, spec, references or {}, ref_cache)
+            if target is _MISSING:
+                problems.append(f"PARAMS[{name!r}]: source {src!r} names nothing measurable on reference {rid!r} (use bbox_min/bbox_max/extents/center.<x|y|z>, volume, or a feature id like C03.diameter)")
+                continue
+            try:
+                lit = _ast.literal_eval(value_repr)
+            except Exception:
+                continue
+            if isinstance(lit, (int, float)) and isinstance(target, (int, float)) and abs(float(lit) - float(target)) > MEASURED_TOL:
+                problems.append(f"PARAMS[{name!r}] = {lit} but {src} measures {target} (differs by {abs(float(lit) - float(target)):.4f}; cite the measurement, do not change it)")
+            continue
         if not src or not src.startswith("spec:"):
             continue
         path = src[len("spec:"):].strip()
@@ -241,6 +263,41 @@ def check_sources(result: LintResult, spec: dict) -> list[str]:
 
 
 _MISSING = object()
+
+
+def _resolve_measured(rid: str, path: str, spec: dict, references: dict, cache: dict):
+    """``bbox_max.z`` / ``extents.x`` / ``center.y`` / ``volume`` / ``C03.diameter`` on a reference model."""
+    from calipers.reference import load_reference, reference_summary
+
+    if rid not in cache:
+        model = references.get(rid)
+        if model is None:
+            rf = next(x for x in spec["references"] if x["id"] == rid)
+            model = load_reference(rf, spec.get("_base_dir"))
+            references[rid] = model
+        cache[rid] = {"model": model, "summary": reference_summary(model), "features": None}
+    entry = cache[rid]
+    parts = [p for p in path.replace("[", ".").replace("]", "").split(".") if p]
+    if not parts:
+        return _MISSING
+    node = entry["summary"]
+    if parts[0] not in node:  # a feature id → the reference's feature report (computed once)
+        if entry["features"] is None:
+            from calipers.features import extract_features
+
+            f = extract_features(entry["model"])
+            entry["features"] = {e["id"]: e for e in f["cylinders"] + f["planes"] + f.get("slots", [])}
+        node = entry["features"]
+    for key in parts:
+        if isinstance(node, dict) and key in node:
+            node = node[key]
+        elif isinstance(node, (list, tuple)) and key in ("x", "y", "z"):
+            node = node["xyz".index(key)]
+        elif isinstance(node, (list, tuple)) and key.lstrip("-").isdigit() and -len(node) <= int(key) < len(node):
+            node = node[int(key)]
+        else:
+            return _MISSING
+    return node
 
 
 def _resolve_spec_path(spec: dict, path: str):

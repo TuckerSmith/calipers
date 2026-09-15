@@ -510,7 +510,7 @@ def feature_symmetry(features: dict, plane_normal: Sequence[float], offset: floa
     Point sampling can miss a single small asymmetric feature; mirroring the *features* cannot.
     """
     n = unit(plane_normal)
-    cyls = [c for c in features.get("cylinders", []) if c["kind"] not in {"partial", "fillet_candidate"}]
+    cyls = [c for c in features.get("cylinders", []) if c["kind"] not in {"partial", "fillet_candidate", "slot_end"}]
     unmatched = []
     for c in cyls:
         p = np.asarray(c["axis_point"])

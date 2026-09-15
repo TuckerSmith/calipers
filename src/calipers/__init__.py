@@ -9,4 +9,4 @@ from calipers.model import Model, load
 from calipers.report import GeometryReport, build_report
 
 __all__ = ["Model", "load", "GeometryReport", "build_report", "__version__"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

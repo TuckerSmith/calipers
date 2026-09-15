@@ -1,0 +1,58 @@
+part: benchy_enclosure
+units: mm
+references:
+- id: benchy
+  path: ../../tests/fixtures/3DBenchy.stl
+envelope:
+  extents:
+    x:
+    - 65.201
+    - 0.05
+    y:
+    - 36.204
+    - 0.05
+    z:
+    - 51.2
+    - 0.05
+solid:
+  valid: true
+  single_body: true
+keep_out:
+- id: opening
+  from: benchy
+  face: +z
+  depth: 3.6
+  pad: 0.54
+fit:
+- type: clearance
+  ref: benchy
+  min: 0.6
+- type: gap
+  ref: benchy
+  directions:
+    +x:
+    - 0.6
+    - 1.6
+    -x:
+    - 0.6
+    - 1.6
+    +y:
+    - 0.6
+    - 1.6
+    -y:
+    - 0.6
+    - 1.6
+    -z:
+    - 0.6
+    - 1.6
+- type: enclosed
+  ref: benchy
+  min_fraction: 0.85
+  open:
+  - +z
+printability:
+  min_wall: 1.95
+  bed:
+  - 256.0
+  - 256.0
+  - 256.0

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "calipers"
-version = "0.2.0"
+version = "0.3.0"
 description = "Calipers for AI: kernel-exact interrogation, verification and generation of 3D geometry for LLM-driven CAD."
 readme = "README.md"
 requires-python = ">=3.10"

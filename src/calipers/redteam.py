@@ -56,6 +56,7 @@ class Recipe:
 
     def describe(self) -> str:
         c = ", ".join(f"{g.kind} Ø{g.diameter:.2f}×{g.height:.2f}" for g in self.cylinders)
+        c += "".join(f", slot {sl['width']:.1f}×{sl['length']:.2f}" for sl in self.slots)
         return f"seed {self.seed}: {self.base} {self.dims}, fillet R{self.fillet_r}, [{c}], slots {len(self.slots)}, {self.tessellation}"
 
 
@@ -230,7 +231,7 @@ def build_recipe(seed: int) -> tuple[object, Recipe]:
                     with Locations((x, y)):
                         SlotCenterPoint(center=(0, 0), point=(length / 2 - w / 2, 0), height=w)
                 extrude(sk.sketch, amount=-(T + 1.0), mode=Mode.SUBTRACT)
-                recipe.slots.append({"width": w, "length": length, "center": [x, y]})
+                recipe.slots.append({"width": w, "length": length, "center": np.array([x, y, 0.0]), "direction": np.array([1.0, 0.0, 0.0]), "axis": np.array([0.0, 0.0, 1.0]), "depth": T})
     part = bp.part
 
     # random rigid transform
@@ -244,6 +245,10 @@ def build_recipe(seed: int) -> tuple[object, Recipe]:
         for g in recipe.cylinders:
             g.axis_point = R @ g.axis_point + shift
             g.axis_dir = R @ g.axis_dir
+        for sl in recipe.slots:
+            sl["center"] = R @ sl["center"] + shift
+            sl["direction"] = R @ sl["direction"]
+            sl["axis"] = R @ sl["axis"]
         recipe.transform = {"axis": [round(float(v), 4) for v in axis_dir], "angle_deg": round(angle, 3), "shift": [round(float(v), 3) for v in shift]}
     return part, recipe
 
@@ -298,7 +303,7 @@ def score_case(seed: int, keep_dir: Optional[Path] = None) -> dict:
     for label, path in (("brep", step), ("mesh", stl)):
         model = Model.load(path)
         feats = extract_features(model)
-        full = [c for c in feats["cylinders"] if c["kind"] not in {"partial", "fillet_candidate"}]
+        full = [c for c in feats["cylinders"] if c["kind"] not in {"partial", "fillet_candidate", "slot_end"}]
         d_tol, pos_tol, h_tol = (0.005, 0.01, 0.01) if label == "brep" else tol_by_tess[recipe.tessellation]
         matched, misses, d_errs = 0, [], []
         used = set()
@@ -311,7 +316,32 @@ def score_case(seed: int, keep_dir: Optional[Path] = None) -> dict:
                 matched += 1
                 d_errs.append(abs(m["diameter"] - g.diameter))
         spurious = [f"{c['kind']} Ø{c['diameter']:.3f}×{c['height']:.2f}" for c in full if c["id"] not in used]
+        slot_hits, slot_miss = 0, []
+        used_slots: set[str] = set()
+        for sl in recipe.slots:
+            hit = None
+            for s_ in feats.get("slots", []):
+                if s_["id"] in used_slots or s_["kind"] != "through_slot":
+                    continue
+                if abs(s_["width"] - sl["width"]) > d_tol or abs(s_["length"] - sl["length"]) > 2 * d_tol or abs(s_["depth"] - sl["depth"]) > h_tol:
+                    continue
+                if abs(float(np.asarray(s_["direction"]) @ sl["direction"])) < 0.9995 or abs(float(np.asarray(s_["axis_dir"]) @ sl["axis"])) < 0.9995:
+                    continue
+                rel = np.asarray(s_["center"]) - sl["center"]
+                if np.linalg.norm(rel - (rel @ sl["axis"]) * sl["axis"]) > pos_tol:
+                    continue
+                hit = s_
+                break
+            if hit is None:
+                slot_miss.append(f"slot {sl['width']:.1f}×{sl['length']:.2f} at {np.round(sl['center'], 2).tolist()}")
+            else:
+                used_slots.add(hit["id"])
+                slot_hits += 1
+        spurious_slots = [f"{s_['kind']} {s_['width']}×{s_['length']}" for s_ in feats.get("slots", []) if s_["id"] not in used_slots]
         res["paths"][label] = {
+            "slot_recall": (slot_hits / len(recipe.slots)) if recipe.slots else 1.0,
+            "missed_slots": slot_miss,
+            "spurious_slots": spurious_slots,
             "recall": matched / max(len(recipe.cylinders), 1),
             "precision": (len(full) - len(spurious)) / max(len(full), 1),
             "missed": misses,
@@ -325,6 +355,7 @@ def score_case(seed: int, keep_dir: Optional[Path] = None) -> dict:
     res["plane_count_agrees"] = abs(b["planes"] - m["planes"]) <= 0  # teacher vs student
     res["ok"] = (
         b["recall"] == 1.0 and b["precision"] == 1.0 and m["recall"] == 1.0 and m["precision"] == 1.0 and res["plane_count_agrees"]
+        and b["slot_recall"] == 1.0 and m["slot_recall"] == 1.0 and not b["spurious_slots"] and not m["spurious_slots"]
     )
     res["elapsed_s"] = round(time.time() - t0, 2)
     if keep_dir is None:
@@ -349,8 +380,8 @@ def run(seeds: list[int], keep_dir: Optional[Path] = None, verbose: bool = True)
             print(f"[{flag}] seed {s}: {r.get('recipe', r.get('error', ''))}", flush=True)
             if not r.get("ok"):
                 for label, p in r.get("paths", {}).items():
-                    if p["missed"] or p["spurious"]:
-                        print(f"       {label}: missed {p['missed']} spurious {p['spurious']}", flush=True)
+                    if p["missed"] or p["spurious"] or p.get("missed_slots") or p.get("spurious_slots"):
+                        print(f"       {label}: missed {p['missed'] + p.get('missed_slots', [])} spurious {p['spurious'] + p.get('spurious_slots', [])}", flush=True)
                 if r.get("paths") and not r.get("plane_count_agrees", True):
                     print(f"       planes: brep {r['paths']['brep']['planes']} vs mesh {r['paths']['mesh']['planes']}", flush=True)
     n_ok = sum(1 for c in cases if c.get("ok"))
@@ -382,7 +413,9 @@ def to_markdown(result: dict) -> str:
             lines.append(f"| {c['seed']} | – | – | – | – | – | crash: {c['error']} |")
             continue
         b, m = c["paths"]["brep"], c["paths"]["mesh"]
-        status = "ok" if c["ok"] else "; ".join(filter(None, ["missed: " + ", ".join(m["missed"] + b["missed"]) if (m["missed"] or b["missed"]) else "", "spurious: " + ", ".join(m["spurious"] + b["spurious"]) if (m["spurious"] or b["spurious"]) else "", "" if c["plane_count_agrees"] else "plane count differs"]))
+        missed = m["missed"] + b["missed"] + m.get("missed_slots", []) + b.get("missed_slots", [])
+        spurious = m["spurious"] + b["spurious"] + m.get("spurious_slots", []) + b.get("spurious_slots", [])
+        status = "ok" if c["ok"] else "; ".join(filter(None, ["missed: " + ", ".join(missed) if missed else "", "spurious: " + ", ".join(spurious) if spurious else "", "" if c["plane_count_agrees"] else "plane count differs"]))
         lines.append(f"| {c['seed']} | {c['tessellation']} | {c['n_gt']} | {b['recall']:.2f}/{b['precision']:.2f} | {m['recall']:.2f}/{m['precision']:.2f} | {b['planes']}/{m['planes']} | {status} |")
     return "\n".join(lines)
 
