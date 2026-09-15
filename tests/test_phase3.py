@@ -391,3 +391,74 @@ def test_render_splits_long_triangles_before_painter_sort():
     longest = float(np.linalg.norm(edges[:, 0] - edges[:, 1], axis=1).max())
     assert longest <= MAX_EDGE_FRACTION * float(np.linalg.norm(box.extents)) + 1e-9
     assert abs(ready.volume - box.volume) < 1e-6 and ready.is_watertight
+
+
+# ----------------------------------------------------------------------------- Phase 3 adversarial review (5 confirmed findings)
+def test_review_vector_directions_round_trip(device_files, enclosure_files):
+    """Review #1: a gap direction or open direction given as a vector passed normalize and crashed verify."""
+    spec = normalize({"references": [{"id": "device", "path": str(device_files["stl"])}], "fit": [
+        {"type": "gap", "ref": "device", "directions": {"[1, 0, 0]": [0.5, 0.6], "-z": [0.5, 0.6]}},
+        {"type": "enclosed", "ref": "device", "min_fraction": 0.9, "open": [[0, 0, 1]]},
+    ]})
+    res = verify(load(enclosure_files["good"]), spec)
+    assert res.passed, res.to_text()
+    with pytest.raises(SpecError, match="direction"):
+        normalize({"references": [{"id": "d", "path": "d.stl"}], "fit": [{"type": "gap", "ref": "d", "directions": {"sideways": [0, 1]}}]})
+    with pytest.raises(SpecError, match="direction"):
+        normalize({"references": [{"id": "d", "path": "d.stl"}], "fit": [{"type": "enclosed", "ref": "d", "open": [[0, 0]]}]})
+
+
+def test_review_staggered_parallel_slots_are_not_cross_paired(tmp_path):
+    """Review #2: two parallel slots offset sideways were paired end-to-end into phantom diagonal slots."""
+    from build123d import Box, Pos, SlotCenterToCenter, export_step, export_stl, extrude
+
+    part = Box(40, 20, 5) - Pos(0, 0, -5) * extrude(SlotCenterToCenter(10, 2), 10) - Pos(0, 3, -5) * extrude(SlotCenterToCenter(6, 2), 10)
+    export_step(part, str(tmp_path / "two.step"))
+    export_stl(part, str(tmp_path / "two.stl"), tolerance=0.01, angular_tolerance=0.1)
+    for ext in ("step", "stl"):
+        slots = sorted(extract_features(load(tmp_path / f"two.{ext}"))["slots"], key=lambda s: s["length"])
+        assert [round(s["length"], 2) for s in slots] == [8.0, 12.0], slots
+        assert all(abs(abs(s["direction"][0]) - 1) < 1e-3 and s["kind"] == "through_slot" for s in slots)
+        assert np.allclose(slots[0]["center"][:2], [0, 3], atol=0.05) and np.allclose(slots[1]["center"][:2], [0, 0], atol=0.05)
+
+
+def test_review_best_of_n_with_no_candidates():
+    """Review #3: an empty candidate list crashed with IndexError instead of a message."""
+    from calipers.sandbox import candidates_text, run_candidates
+
+    with pytest.raises(ValueError, match="at least one candidate"):
+        run_candidates([])
+    assert candidates_text([]).startswith("# Best-of-0")
+
+
+def test_review_reference_units_are_scaled_into_mm(device_files):
+    """Review #4: `units: inch` on a reference was a label only; the geometry stayed unscaled."""
+    from calipers.reference import load_reference, reference_summary
+
+    ref = load_reference({"id": "device", "path": str(device_files["stl"]), "units": "inch"})
+    assert ref.units == "mm" and np.allclose(reference_summary(ref)["extents"], [40 * 25.4, 30 * 25.4, 10 * 25.4], atol=1e-3)
+    ref = load_reference({"id": "device", "path": str(device_files["step"]), "units": "cm"})
+    assert np.allclose(reference_summary(ref)["extents"], [400, 300, 100], atol=1e-6)
+    with pytest.raises(SpecError, match="unknown units"):
+        normalize({"references": [{"id": "d", "path": "d.stl", "units": "furlongs"}]})
+
+
+def test_review_thin_pin_through_open_reference_is_caught(device_files, tmp_path):
+    """Review #5: with a non-watertight reference the sampled overlap test only asked whether reference
+    points lay inside the part, so a Ø0.5 pin through solid reference material passed. The part's own
+    surface points are now tested against the reference too."""
+    import trimesh
+    from build123d import Box, Cylinder, Pos, export_stl
+
+    m = load(device_files["stl"]).mesh.copy()
+    m = trimesh.Trimesh(vertices=m.vertices, faces=m.faces[1:], process=False)  # drop one triangle: open mesh
+    m.export(str(tmp_path / "open.stl"))
+    assert not trimesh.load(str(tmp_path / "open.stl")).is_watertight
+    pin = Pos(0, 0, -10) * Box(60, 50, 2) + Pos(3, -4, 0) * Cylinder(0.25, 30)
+    export_stl(pin, str(tmp_path / "pin.stl"), tolerance=0.01, angular_tolerance=0.1)
+    spec = normalize({"references": [{"id": "device", "path": str(tmp_path / "open.stl")}], "fit": [{"type": "clearance", "ref": "device", "min": 0.0}]})
+    res = verify(load(tmp_path / "pin.stl"), spec)
+    by = {c.id: c for c in res.checks}
+    assert not by["fit.0.clearance.no_overlap"].passed and "part points inside the reference" in str(by["fit.0.clearance.no_overlap"].measured)
+    assert "not closed" in by["fit.0.clearance.no_overlap"].note
+    assert not by["fit.0.clearance.min_distance"].passed

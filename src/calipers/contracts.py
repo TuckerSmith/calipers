@@ -385,8 +385,13 @@ def verify(model: Model, spec: dict, features: Optional[dict] = None, references
             if f["type"] == "clearance":
                 c = refmod.clearance(model, ref)
                 ov = refmod.overlaps(c)
-                measured = f"{c['overlap_volume']} mm³" if c.get("overlap_volume") is not None else f"{c.get('reference_points_inside_part', '?')} reference points inside the part"
-                checks.append(Check(f"{cid}.no_overlap", f"part and reference '{f['ref']}' do not intersect", not ov, "no overlap", measured, note="exact" if c.get("exact") else "sampled"))
+                if c.get("overlap_volume") is not None:
+                    measured = f"{c['overlap_volume']} mm³"
+                else:
+                    measured = f"{c.get('reference_points_inside_part', '?')} reference points inside the part"
+                    if "part_points_inside_reference" in c:
+                        measured += f", {c['part_points_inside_reference']} part points inside the reference"
+                checks.append(Check(f"{cid}.no_overlap", f"part and reference '{f['ref']}' do not intersect", not ov, "no overlap", measured, note="exact" if c.get("exact") else c.get("note_overlap", "sampled")))
                 md = c["min_distance"]
                 req = f">= {f['min']}" + (f" and <= {f['max']}" if "max" in f else "")
                 ok = (not ov) and md >= f["min"] - 1e-6 and ("max" not in f or md <= f["max"] + 1e-6)

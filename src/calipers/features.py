@@ -39,6 +39,7 @@ RNG_SEED = 7
 MAX_SAMPLE_POINTS = 600  # points kept per cylinder for coverage recomputation after merges
 NORMAL_AXIS_TOL = math.sin(math.radians(1.0))  # cones/tori have normals tilted along the axis
 INLIER_AXIAL_TOL = math.sin(math.radians(2.0))  # per-face: keeps tangent fillet strips out of a cylinder
+SLOT_END_COS = math.cos(math.radians(8.0))  # slot ends must open along the line joining them (staggered parallel slots)
 
 
 @dataclass
@@ -819,8 +820,8 @@ def detect_slots(model: Model, cyls: list[Cylinder], ids: list[str]) -> list[dic
             if overlap < 0.5 * min(a.height, b.height):
                 continue
             pd = perp / dist
-            if float(outward(a) @ pd) > -0.7 or float(outward(b) @ pd) < 0.7:
-                continue  # the round ends must face away from each other
+            if float(outward(a) @ pd) > -SLOT_END_COS or float(outward(b) @ pd) < SLOT_END_COS:
+                continue  # the round ends must face away from each other *along* the pairing direction
             if best is None or dist < best[0]:
                 best = (dist, j, b, pd, lo_a, hi_a, lo_b, hi_b)
         if best is None:
