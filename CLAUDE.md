@@ -14,8 +14,9 @@ Four goals, in priority order for the first use case ("design around a reference
 1. Import and *understand* an existing model (STL/OBJ/3MF/STEP) — Phase 1, done.
 2. Store models in an LLM-legible way — layered: STEP as truth, code as canonical editable form,
    `geometry_report.json` / text digest as the model-facing view. Done in principle (Phase 1).
-3. Create parts from requirements and/or reference models with verified accuracy — Phase 2/3.
-4. An effective interface — MCP server + CLI. CLI done; MCP is Phase 2.
+3. Create parts from requirements and/or reference models with verified accuracy — Phase 2 done
+   for requirements (spec → contracts → generate/verify loop); reference models are Phase 3.
+4. An effective interface — MCP server (`calipers-mcp`) + CLI. Both done.
 
 ## Decisions (don't relitigate without a reason)
 
@@ -34,17 +35,33 @@ Four goals, in priority order for the first use case ("design around a reference
 
 ```
 src/calipers/
-  model.py     Model: mesh and/or B-rep, lazy tessellation, units (mm)
-  measure.py   summary, oriented bbox, sections (+exact OCCT sections), symmetry, wall thickness
-  features.py  planes + cylinders (holes/bosses/pins/shafts/fillets) from B-rep (exact) or mesh (fitted)
-  report.py    GeometryReport: JSON (schema calipers.report/0.1) and LLM text digest
-  render.py    headless shaded views, hidden-line SVG for B-reps, section plots
-  export.py    STEP/BREP/STL/3MF/OBJ/PLY export
-  cli.py       `calipers report|summary|features|section|render|export`
-tests/         pytest; fixtures: NIST AM test artifact (STEP+STL, public domain), 3DBenchy (public domain)
-docs/          approach-v0.1.md (the plan), this file
-spikes/        the original feasibility spike
+  model.py       Model: mesh and/or B-rep, lazy tessellation, units (mm), mesh cleaning
+  measure.py     summary, oriented bbox, sections (+exact OCCT sections), symmetry (+exact), wall thickness
+  features.py    planes + cylinders (holes/bosses/pins/shafts/fillets) from B-rep (exact) or mesh (fitted)
+  report.py      GeometryReport: JSON (schema calipers.report/0.1) and LLM text digest
+  render.py      headless shaded views, hidden-line SVG for B-reps, section plots
+  export.py      STEP/BREP/STL/3MF/OBJ/PLY export
+  spec.py        requirements schema (YAML/JSON) → normalized dict; conventions in its docstring
+  contracts.py   verify(model, spec) → checks with required/measured/deviation
+  provenance.py  "no naked numbers" lint; check_sources() resolves spec: sources
+  sandbox.py     run_code(): subprocess execution + report + verify + lint; api_help()
+  mcp_server.py  FastMCP server (`calipers-mcp`)
+  redteam.py     random-part harness with ground truth; `calipers redteam`
+  cli.py         report|summary|features|section|render|export|verify|lint|run|api|redteam
+tests/           pytest; fixtures: NIST AM test artifact (STEP+STL), 3DBenchy (both public domain)
+docs/            approach-v0.1.md (the plan), testing-and-review.md (the process), review-prompt.md
+spikes/          the original feasibility spike
 ```
+
+## The generate-verify loop (Phase 2)
+
+spec.yaml → model writes build123d code with `PARAMS = {name: (value, "source")}` → `calipers run
+code.py --spec spec.yaml` (or MCP `run_code`) → execution errors / provenance lint / geometry report /
+contract check → repair → repeat until exit 0. The verifier is deterministic; the generator is not.
+Conventions the model must know: `result` holds the shape; positions are in-plane ⟂ axis (2-D) or
+on the axis segment (3-D); plane offset = normal · point; `entry: "+"/"-"` says which face a blind
+hole or boss opens to. `exact_counts` covers cylindrical features only — use `volume` bounds to
+catch other junk (slots/pockets are Phase 3 features).
 
 ## How the mesh feature path works (the non-obvious part)
 
@@ -70,7 +87,10 @@ embree ray casting, a compiled RANSAC scorer, skipping RANSAC on regions with no
 
 ## Working agreement
 
-- Tests must stay green: `python -m pytest -q` (≈90 s; Benchy tests dominate).
+- Tests must stay green: `python -m pytest -q` (≈4 min; Benchy and red-team seeds dominate).
+- The process is `docs/testing-and-review.md`: ground-truth tests → standard artefacts → red team
+  (teacher/student) → contracts → independent adversarial review per phase (`docs/review-prompt.md`).
+  Run `calipers redteam --n 200 --seed <new>` before calling a phase done.
 - Every measurement path must state exact vs fitted. Never round away below 1 µm in code; reports
   round to 4 decimals.
 - Prefer adding a ground-truth test (build the part with build123d, assert on the construction
@@ -82,9 +102,9 @@ embree ray casting, a compiled RANSAC scorer, skipping RANSAC on regions with no
 ## Roadmap
 
 - Phase 1 (done): geometry core + CLI + tests against the bracket, NIST artifact, Benchy.
-- Phase 2: requirements schema → executable contracts; build123d execution sandbox with error
-  capture and docs lookup; MCP server (`report`, `measure`, `section`, `render`, `execute`,
-  `verify`, `export`); dimension provenance linter; version diffing.
+- Phase 2 (done): spec → contracts, sandbox, provenance lint, MCP server, red-team harness,
+  adversarial review; end-to-end unattended demo passed. Not done: version diffing between runs.
 - Phase 3: reference-conditioned design (keep-in/keep-out volumes, clearance/fit tests, enclosure &
-  mount generators), coaxial/pattern grouping, counterbores, fillet rings, sphere/cone/torus fits.
+  mount generators), spec support for slots/pockets/chamfers, coaxial/pattern grouping, fillet
+  rings, sphere/cone/torus fits, best-of-N generation with the verifier as judge.
 - Phase 4: evaluation harness (CADGenBench, CADTestBench, own parts), docs, FreeCAD handoff polish.

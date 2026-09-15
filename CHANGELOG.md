@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.0 — 2026-09-15 — Phase 2: generate & verify
+
+- `spec`: requirements schema (YAML/JSON) — envelope, volume, solid validity, cylindrical features
+  with diameter/length/positions (2-D in-plane or 3-D on-axis)/entry face, exact counts, planes
+  (offset = normal · point), relations (distance, coaxial, parallel, perpendicular), symmetry,
+  printability — validated with precise error messages.
+- `contracts`: `verify(model, spec)` turns every requirement into a pass/fail check with required vs
+  measured and the deviation; instances assigned by the Hungarian algorithm; kernel-exact mirror
+  test (symmetric-difference volume) for B-reps.
+- `provenance`: "no naked numbers" lint — every dimension must be declared in `PARAMS` with a
+  `spec:/measured:/derived:/standard:/assumption:` source; constant folding, string-smuggling and
+  PARAMS re-definition are caught; `spec:` sources are resolved against the spec and their values
+  compared to the nominal.
+- `sandbox`: `run_code()` executes build123d (or CadQuery) code in a subprocess with a timeout,
+  refuses non-solid results, reports structured errors (type, message, failing line), then
+  reports/verifies/lints; `api_help()` for build123d signatures.
+- `mcp_server` (`calipers-mcp`): report, report_json, section, measure_distance, render,
+  spec_schema, verify, lint_provenance, run_code, export, api_help, redteam.
+- `redteam`: random parametric parts with ground truth (plates, discs, tubes, L-brackets with wall
+  holes; through/blind/counterbored/chamfered holes; bosses with base fillets; slots; corner
+  fillets; rigid transforms; fine/medium/coarse tessellation) scored against both feature paths —
+  CLI + scoreboard + pinned CI seeds. First 128-seed sweep found two algorithm bugs (chamfer facets
+  taken as planes at coarse tessellation; tangent fillet strips absorbed into cylinder fits) — fixed.
+- CLI: `verify`, `lint`, `run`, `api`, `redteam`. Tests: 70 (+ pinned red-team seeds).
+- Independent adversarial review of Phase 2 found 12 issues (blind hole from the wrong face
+  passing, 3-D positions meaning mid-height, small asymmetric notch passing symmetry, twelve lint
+  evasions, unchecked `spec:` sources, broken CadQuery interop, phantom footer line numbers,
+  scripts exiting early, sketches passing `solid.valid`, plane-offset sign confusion, greedy
+  instance matching, spec validation gaps) — all fixed with regression tests.
+- End-to-end demo: a fresh agent given only the CLI produced a 4-feature sensor mount from a spec
+  with 43/43 contracts passing and a clean provenance lint on its first geometry attempt.
+
 ## 0.1.0 — 2026-09-15 — Phase 1: the digital calipers
 
 - `Model`: unified loader for STL/OBJ/PLY/3MF/OFF/GLB (trimesh) and STEP/BREP (build123d/OCCT);

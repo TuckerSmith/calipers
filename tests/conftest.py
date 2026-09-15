@@ -58,3 +58,8 @@ def nist_files() -> dict[str, Path]:
 @pytest.fixture(scope="session")
 def benchy_file() -> Path:
     return FIXTURES / "3DBenchy.stl"
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"

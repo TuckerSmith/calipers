@@ -33,7 +33,7 @@ Mirror symmetry: plane normal (1.000, 0.000, 0.000) at offset 0.000 (p95 dev 0.0
 
 ```
 pip install -e ".[dev,png]"        # build123d (OCCT), trimesh, shapely, matplotlib, typer, pytest, cairosvg
-python -m pytest -q                # ≈40 s; runs against the NIST AM test artifact and the 3DBenchy
+python -m pytest -q                # ≈4 min; NIST AM test artifact, 3DBenchy, pinned red-team seeds
 ```
 
 ## Commands
@@ -70,13 +70,47 @@ between STEP and STL within 0.01 mm) and the 3DBenchy (published nominals recove
 envelope, chimney bore Ø3.00 × 11.00, hawsepipes Ø4.00, rear window Ø9.00 / Ø12.00 with 0.30 flange,
 cargo box 8.00 × 7.00). See `tests/`.
 
+## Generate and verify (Phase 2)
+
+Write the requirements as a spec (`calipers-mcp` → `spec_schema`, or `src/calipers/spec.py`), then
+let a model write build123d code whose every dimension is declared with a source:
+
+```python
+PARAMS = {"hole_d": (5.0, "spec:mount_holes.diameter"), "wall": (2.4, "assumption:3 perimeters")}
+P = {k: v[0] for k, v in PARAMS.items()}
+...
+result = bp.part
+```
+
+```
+$ calipers run part.py --spec spec.yaml --out out/
+# Execution OK in 3.1s → out/result.step
+# Provenance lint: PASS — 18 parameters, 0 naked numbers, 0 problems
+# Geometry report: result (B-rep — exact) ...
+# Contract check: PASS (43/43 checks passed)
+[ok  ] mount_holes.0.diameter: diameter — required 4.3 ± 0.05, measured 4.3 (dev +0.0000)
+...
+```
+
+Failures come back as exact deviations, execution errors with the failing line, and every unsourced
+number — so the model repairs instead of guessing. `calipers verify part.step spec.yaml` checks an
+existing file; `calipers lint part.py` runs the provenance check alone; `calipers api Hole` prints
+a build123d signature.
+
+**MCP:** `pip install -e .` then add `{"mcpServers": {"calipers": {"command": "calipers-mcp"}}}` to
+Claude Desktop's config (or `claude mcp add calipers -- calipers-mcp` for Claude Code). Tools:
+`report`, `report_json`, `section`, `measure_distance`, `render`, `spec_schema`, `verify`,
+`lint_provenance`, `run_code`, `export`, `api_help`, `redteam`.
+
+**Red team:** `calipers redteam --n 50 --seed 0 --out scoreboard.json` builds random parts with
+known ground truth and scores both feature paths; every failing seed is reproducible with `--keep`.
+See `docs/testing-and-review.md` for the whole process.
+
 ## Roadmap
 
-Phase 2 turns this into the verification half of a generate-measure-repair loop: requirements as
-executable contracts, a build123d execution sandbox, an MCP server so Claude can use the instruments
-directly, and a "no naked numbers" provenance check on generated code. Phase 3 adds design around a
-reference object (keep-in / keep-out volumes, clearance tests, enclosure and mount generators).
-`docs/approach-v0.1.md` has the reasoning and the alternatives that were considered.
+Phase 3 adds design around a reference object (keep-in / keep-out volumes, clearance tests,
+enclosure and mount generators), spec support for slots and pockets, and best-of-N generation with
+the verifier as judge. `docs/approach-v0.1.md` has the reasoning and the alternatives considered.
 
 ## Test fixtures
 

@@ -527,3 +527,25 @@ def feature_symmetry(features: dict, plane_normal: Sequence[float], offset: floa
         if not ok:
             unmatched.append(c["id"])
     return {"checked": len(cyls), "unmatched": unmatched, "ok": not unmatched}
+
+
+def exact_symmetry(model: Model, normal: Sequence[float], offset: float, rel_tol: float = 1e-4) -> Optional[dict]:
+    """Kernel-exact mirror test for B-reps: the symmetric-difference volume of the part and its mirror.
+
+    Returns None for mesh models. ``symmetric`` when the mismatched volume is below ``rel_tol`` of the
+    part volume (a 9 mm³ notch on a 24,000 mm³ plate is 4e-4 — caught).
+    """
+    if not model.is_exact:
+        return None
+    from build123d import Plane, Vector
+
+    n = unit(normal)
+    plane = Plane(origin=Vector(*(n * float(offset))), z_dir=Vector(*n))
+    shape = model.shape
+    try:
+        mirrored = shape.mirror(plane)
+        vol = float(shape.volume)
+        diff = float((shape - mirrored).volume) + float((mirrored - shape).volume)
+    except Exception as exc:  # pragma: no cover - kernel edge cases
+        return {"exact": True, "error": str(exc)}
+    return {"exact": True, "volume": r(vol), "mismatch_volume": r(diff), "mismatch_fraction": r(diff / max(vol, 1e-12), 6), "symmetric": bool(diff <= rel_tol * vol)}

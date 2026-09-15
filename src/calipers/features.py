@@ -38,6 +38,7 @@ RANSAC_SCORE_FACES = 20_000  # hypotheses are scored on at most this many (area-
 RNG_SEED = 7
 MAX_SAMPLE_POINTS = 600  # points kept per cylinder for coverage recomputation after merges
 NORMAL_AXIS_TOL = math.sin(math.radians(1.0))  # cones/tori have normals tilted along the axis
+INLIER_AXIAL_TOL = math.sin(math.radians(2.0))  # per-face: keeps tangent fillet strips out of a cylinder
 
 
 @dataclass
@@ -303,7 +304,9 @@ def _try_whole_cylinder(ctx: _MeshCtx, faces: np.ndarray) -> Optional[Cylinder]:
 def _inlier_faces(ctx: _MeshCtx, faces: np.ndarray, cyl: Cylinder) -> np.ndarray:
     """Faces of ``faces`` whose normals are ⟂ to the axis and whose corners all lie on the cylinder."""
     tol = cylinder_tolerance(cyl.radius)
-    perp = np.abs(ctx.normals[faces] @ cyl.axis_dir) < math.sin(math.radians(6.0))
+    # a cylinder facet's normal is exactly ⟂ to the axis at any tessellation; the first strip of a
+    # tangent fillet is tilted by half its angular step (≈ 3°), so a tight test keeps it out
+    perp = np.abs(ctx.normals[faces] @ cyl.axis_dir) < INLIER_AXIAL_TOL
     vres = np.abs(_face_vertex_residuals(ctx, faces, cyl)).max(axis=1)
     return faces[perp & (vres <= tol)]
 
@@ -364,7 +367,7 @@ def _ransac_cylinder(ctx: _MeshCtx, faces: np.ndarray, rng: np.random.Generator)
         # candidate radius from the seed faces' own corners, which lie on the true surface
         Vij = np.stack([V[[i, j]] @ u, V[[i, j]] @ v], axis=-1) - center2  # seed corners (2, 3, 2)
         rad = float(np.median(np.linalg.norm(Vij, axis=-1)))
-        perp = np.abs(Ns @ d) < math.sin(math.radians(6.0))
+        perp = np.abs(Ns @ d) < INLIER_AXIAL_TOL
         V2 = np.stack([Vs @ u, Vs @ v], axis=-1) - center2  # (m, 3, 2)
         vres = np.abs(np.linalg.norm(V2, axis=-1) - rad).max(axis=1)
         inl = perp & (vres <= cylinder_tolerance(rad))
@@ -430,9 +433,12 @@ def _strip_patches(ctx: _MeshCtx, subs: list[np.ndarray], region_faces: np.ndarr
         neighbours.setdefault(int(j), set()).add(int(i))
     strips: set[int] = set()
     for k, sub in enumerate(subs):
+        sib = [j for j in neighbours.get(k, ()) if 0.4 <= areas[j] / max(areas[k], 1e-12) <= 2.5]
+        if len(sib) >= 2:
+            strips.add(k)  # a link in a chain of similar facets (cylinder strips, chamfer/cone facets)
+            continue
         if ctx.boundary_smooth_fraction(sub) < 0.75:
             continue
-        sib = [j for j in neighbours.get(k, ()) if 0.4 <= areas[j] / max(areas[k], 1e-12) <= 2.5]
         if sib or areas[k] < 0.02 * region_area:
             strips.add(k)
     return strips

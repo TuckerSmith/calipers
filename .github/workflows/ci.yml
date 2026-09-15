@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -26,3 +26,23 @@ jobs:
         run: ruff check src tests
       - name: Test
         run: python -m pytest -q
+
+  redteam:
+    # a wider random sweep than the pinned seeds in tests/: any failure is a finding, not noise
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Red team (120 random parts)
+        run: calipers redteam --n 120 --seed 1000 --out redteam-scoreboard.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: redteam-scoreboard
+          path: redteam-scoreboard.*

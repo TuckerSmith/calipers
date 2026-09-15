@@ -116,5 +116,75 @@ def export(file: Path = typer.Argument(..., exists=True), out: Path = typer.Argu
     typer.echo(_export(load(file), out))
 
 
+@app.command()
+def verify(file: Path = typer.Argument(..., exists=True), spec: Path = typer.Argument(..., exists=True), json_out: Optional[Path] = typer.Option(None, "--json")):
+    """Check a model against a spec (YAML/JSON): pass/fail per requirement with measured values and deviations."""
+    from calipers.contracts import verify as _verify
+    from calipers.spec import load_spec
+
+    res = _verify(load(file), load_spec(spec))
+    if json_out:
+        json_out.write_text(json.dumps(res.to_dict(), indent=2))
+    typer.echo(res.to_text())
+    raise typer.Exit(code=0 if res.passed else 1)
+
+
+@app.command()
+def lint(code: Path = typer.Argument(..., exists=True)):
+    """Dimension-provenance lint ('no naked numbers') for a build123d script."""
+    from calipers.provenance import lint_file
+
+    res = lint_file(str(code))
+    typer.echo(res.to_text())
+    raise typer.Exit(code=0 if res.ok else 1)
+
+
+@app.command()
+def run(
+    code: Path = typer.Argument(..., exists=True, help="build123d script that assigns the shape to `result`"),
+    spec: Optional[Path] = typer.Option(None, "--spec", "-s", exists=True),
+    out_dir: Optional[Path] = typer.Option(None, "--out", "-o", help="Where result.step/.stl land (temp dir by default)"),
+    render: bool = typer.Option(False, help="Also render iso/front/top views"),
+    section: list[str] = typer.Option([], "--section", help="Sections to include in the report, e.g. z=0"),
+    json_out: Optional[Path] = typer.Option(None, "--json"),
+):
+    """Execute a build123d script, then report, lint and (with --spec) verify what it produced."""
+    from calipers.sandbox import run_code
+    from calipers.spec import load_spec
+
+    res = run_code(code.read_text(encoding="utf-8"), workdir=out_dir, spec=load_spec(spec) if spec else None, render=render, sections=tuple(section))
+    if json_out:
+        json_out.write_text(json.dumps(res.to_dict(), indent=2, default=str))
+    typer.echo(res.to_text())
+    ok = res.ok and (res.verify is None or res.verify["passed"]) and (res.lint is None or res.lint.get("ok", True))
+    raise typer.Exit(code=0 if ok else 1)
+
+
+@app.command()
+def api(name: str = typer.Argument(..., help="build123d name or a fragment to search")):
+    """Signature and docstring of a build123d object, or matching names for a fragment."""
+    from calipers.sandbox import api_help
+
+    typer.echo(api_help(name))
+
+
+@app.command()
+def redteam(
+    n: int = typer.Option(20, help="number of random parts"),
+    seed: int = typer.Option(0, help="first seed"),
+    out: Optional[Path] = typer.Option(None, help="scoreboard JSON path (a .md is written next to it)"),
+    keep: Optional[Path] = typer.Option(None, help="keep the generated STEP/STL files here"),
+):
+    """Random-part red-team harness: build parts with known ground truth and score both feature paths."""
+    from calipers.redteam import run as _run
+    from calipers.redteam import to_markdown, write_scoreboard
+
+    res = _run(list(range(seed, seed + n)), keep_dir=keep)
+    if out:
+        write_scoreboard(res, out, out.with_suffix(".md"))
+    typer.echo(to_markdown(res).splitlines()[2])
+    raise typer.Exit(code=0 if res["summary"]["failed_seeds"] == [] else 1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

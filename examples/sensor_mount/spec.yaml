@@ -1,0 +1,40 @@
+part: sensor_mount
+units: mm
+envelope:
+  extents: {x: [80, 0.1], y: [50, 0.1], z: [14, 0.1]}
+solid: {valid: true, single_body: true}
+features:
+  - id: mount_holes            # M4 clearance holes, one in each corner
+    kind: through_hole
+    diameter: [4.3, 0.05]
+    axis: z
+    positions: [[-35, -20], [35, -20], [-35, 20], [35, 20]]
+    pos_tol: 0.1
+    length: [6, 0.1]
+  - id: window                 # central through-hole for the sensor lens
+    kind: through_hole
+    diameter: [20, 0.05]
+    axis: z
+    positions: [[0, 0]]
+    length: [6, 0.1]
+  - id: boss                   # raised boss for a press-fit bearing
+    kind: boss
+    diameter: [16, 0.05]
+    height: [8, 0.1]
+    axis: z
+    positions: [[-25, 0]]
+  - id: bearing_seat           # blind bore inside the boss, from the top
+    kind: blind_hole
+    diameter: [8, 0.05]
+    axis: z
+    positions: [[-25, 0]]
+    length: [6, 0.1]
+exact_counts: true
+planes:
+  - {id: top, normal: [0, 0, 1], offset: [3, 0.05], min_area: 3000}
+  - {id: bottom, normal: [0, 0, -1], offset: [3, 0.05], min_area: 3500}
+relations:
+  - {type: coaxial, between: [boss.0, bearing_seat.0], tol: 0.05}
+  - {type: distance, between: [mount_holes.0, mount_holes.1], value: [70, 0.1]}
+symmetry: [y]
+printability: {min_wall: 1.5, bed: [256, 256, 256]}

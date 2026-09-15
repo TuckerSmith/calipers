@@ -1,0 +1,9 @@
+# Normalise line endings to LF in the repository; check out as LF everywhere (no CRLF churn).
+* text=auto eol=lf
+*.ps1 text eol=crlf
+# Geometry fixtures are data: never normalise them.
+*.stl -text
+*.step -text
+*.stp -text
+*.3mf binary
+*.png binary
