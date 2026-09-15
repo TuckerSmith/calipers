@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.0 — 2026-09-15 — Phase 3: design around a reference
+
+- `reference`: a spec may name **references** (STL/OBJ/3MF/STEP, optionally placed by rotate/translate).
+  **keep_out / keep_in** regions (explicit boxes and cylinders, or boxes derived from a reference's
+  envelope: `from: device, face: "+x", depth: 20`) are checked by kernel-exact booleans for B-reps
+  (manifold mesh booleans otherwise). **fit** contracts: `clearance` (no overlap + closest approach,
+  exact for STEP vs STEP), `gap` (per direction, the nearest part wall seen from the reference
+  surface must lie in [min, max] — held without rattling), `enclosed` (fraction of the reference
+  surface covered, minus declared open directions).
+- `generators`: `calipers generate enclosure|mount --ref FILE` writes a *sourced* build123d script
+  (`measured:<ref>.bbox_max.z`, `measured:<ref>.C03.axis_point.x` …) plus the spec with its fit
+  contracts, then runs the ordinary verify loop. Enclosure: cavity = envelope + clearance, walls,
+  floor opposite the open face, optional corner radius. Mount: plate + standoffs at the reference's
+  measured through holes, screw holes through them, coaxial relations, "rests on the standoffs" gap.
+- Provenance: `measured:<reference id>.<path>` sources are resolved against the loaded reference
+  (envelope fields and feature ids) and their values compared (0.05 mm); the sandbox injects
+  `REFERENCES = {id: path}` so scripts can load the reference themselves.
+- Slots: `kind: slot` in specs (width, length, direction, depth); both feature paths pair
+  half-cylinders into `through_slot` / `blind_slot` with centre, direction and depth; `exact_counts`
+  now covers slots; the red team scores slots on both paths. Patterns: grid / linear / circular
+  groups of identical features in the report.
+- Best-of-N: `calipers best a.py b.py c.py --spec` / MCP `run_candidates` runs candidates in parallel
+  and ranks them by the verifier (executed < lint clean < contracts passed < fewest failures <
+  smallest total deviation).
+- Version diff: `calipers diff a.step b.step` / MCP `diff`; `run_code` diffs against the previous
+  `result.step` in the same work dir. Kernel-exact material added/removed for STEP pairs.
+- Sandbox: address-space and file-size limits on the script subprocess (a resource limit, not a
+  security boundary — documented as such). MCP server ported to `mcp` 2.x (`MCPServer`) with 1.x kept.
+- Exit criterion met: `examples/benchy_enclosure` — an enclosure for the 3DBenchy (an organic,
+  non-watertight mesh) is generated, executed, linted and passes 16/16 contracts unattended (≈55 s).
+  Tests: 88 (+ pinned red-team seeds, now including slots).
+- Findings fixed on the way: build123d's `intersect` on an imported STEP compound returns a
+  `ShapeList` (a naive `.volume` read 0 → booleans now go to OCCT directly); rays cast from a
+  reference surface missed a part face touching it (gap read the *next* wall) → rays start 1 µm
+  behind the surface; `Shape.intersect` returns `None` for an empty result.
+- Self-review pass (8 adversarial constructions: mesh part vs STEP reference, placed references,
+  swallowed device, tilted part, 45° slots on both paths, two references + bolt keep-out, cwd
+  independence, one-sided tight cavity): all correct. One gap found and fixed: `spec:` sources
+  pointing at untoleranced values (`fit.0.min`, `printability.min_wall`) were not value-compared.
+- CI: the GitHub Actions lint step had been red since the Phase 1 push (ruff's default rule set
+  drifted; 210 import-order findings), so the test jobs never ran. Rule set pinned in
+  `pyproject.toml` (`E4 E7 E9 F I`), imports sorted. The first green lint then exposed that 3MF
+  export needs `lxml` (trimesh's 3MF writer) — added as a dependency. `docs/images/` holds renders of the two
+  generated examples (also on the status page for this release).
+- Not done (carried to Phase 4): pockets and chamfers as spec features, sphere/cone/torus fits on
+  meshes, fillet rings, reference features in `relations`, an independent adversarial review of
+  Phase 3 (budget), CADGenBench harness.
+
 ## 0.2.0 — 2026-09-15 — Phase 2: generate & verify
 
 - `spec`: requirements schema (YAML/JSON) — envelope, volume, solid validity, cylindrical features

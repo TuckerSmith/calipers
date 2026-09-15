@@ -15,7 +15,8 @@ Four goals, in priority order for the first use case ("design around a reference
 2. Store models in an LLM-legible way — layered: STEP as truth, code as canonical editable form,
    `geometry_report.json` / text digest as the model-facing view. Done in principle (Phase 1).
 3. Create parts from requirements and/or reference models with verified accuracy — Phase 2 done
-   for requirements (spec → contracts → generate/verify loop); reference models are Phase 3.
+   for requirements (spec → contracts → generate/verify loop); Phase 3 done for reference models
+   (references + keep-in/keep-out + fit contracts, enclosure/mount generators).
 4. An effective interface — MCP server (`calipers-mcp`) + CLI. Both done.
 
 ## Decisions (don't relitigate without a reason)
@@ -43,11 +44,15 @@ src/calipers/
   export.py      STEP/BREP/STL/3MF/OBJ/PLY export
   spec.py        requirements schema (YAML/JSON) → normalized dict; conventions in its docstring
   contracts.py   verify(model, spec) → checks with required/measured/deviation
-  provenance.py  "no naked numbers" lint; check_sources() resolves spec: sources
-  sandbox.py     run_code(): subprocess execution + report + verify + lint; api_help()
-  mcp_server.py  FastMCP server (`calipers-mcp`)
-  redteam.py     random-part harness with ground truth; `calipers redteam`
-  cli.py         report|summary|features|section|render|export|verify|lint|run|api|redteam
+  provenance.py  "no naked numbers" lint; check_sources() resolves spec: and measured:<ref> sources
+  sandbox.py     run_code(): subprocess execution + report + verify + lint (+ diff vs previous run);
+                 run_candidates() best-of-N with the verifier as judge; api_help()
+  reference.py   references (load/place), keep_out/keep_in regions, fit checks (clearance/gap/enclosed)
+  generators.py  enclosure / mount → sourced build123d code + spec with fit contracts
+  diff.py        version diff between two models (planes, cylinders, slots, exact material delta)
+  mcp_server.py  MCP server (`calipers-mcp`; mcp 2.x MCPServer, 1.x FastMCP)
+  redteam.py     random-part harness with ground truth (cylinders + slots); `calipers redteam`
+  cli.py         report|summary|features|section|render|export|verify|lint|run|best|diff|generate|api|redteam
 tests/           pytest; fixtures: NIST AM test artifact (STEP+STL), 3DBenchy (both public domain)
 docs/            approach-v0.1.md (the plan), testing-and-review.md (the process), review-prompt.md
 spikes/          the original feasibility spike
@@ -60,8 +65,22 @@ code.py --spec spec.yaml` (or MCP `run_code`) → execution errors / provenance 
 contract check → repair → repeat until exit 0. The verifier is deterministic; the generator is not.
 Conventions the model must know: `result` holds the shape; positions are in-plane ⟂ axis (2-D) or
 on the axis segment (3-D); plane offset = normal · point; `entry: "+"/"-"` says which face a blind
-hole or boss opens to. `exact_counts` covers cylindrical features only — use `volume` bounds to
-catch other junk (slots/pockets are Phase 3 features).
+hole or boss opens to. `exact_counts` covers cylindrical features and slots — use `volume` bounds to
+catch other junk (pockets/chamfers are not spec features yet).
+
+## Designing around a reference (Phase 3)
+
+`references:` in the spec name imported models (placed by rotate-then-translate); `keep_out` /
+`keep_in` regions and `fit` contracts (`clearance`, `gap` per direction, `enclosed`) are measured
+against them — exact booleans/distances for STEP, sampled rays and closest points for meshes (a
+non-watertight scan still works: points-inside-part replaces the overlap volume). Generated code cites
+`measured:<ref>.bbox_max.z` / `measured:<ref>.C03.axis_point.x`, which `check_sources` verifies against
+the loaded reference (0.05 mm). `calipers generate enclosure|mount --ref FILE` is the reference
+workflow end to end: it writes the sourced script + spec and runs the loop; `examples/benchy_enclosure`
+is the exit-criterion demo. Gap semantics: rays from reference-surface samples whose outward normal
+faces the direction, nearest part hit, *minimum* over samples (the tight spot); a direction with < 50 %
+hits is "unconstrained" and fails. Slots are paired half-cylinders (≈180°, same radius, facing away);
+their ends are re-labelled `slot_end` so they never count as loose partials.
 
 ## How the mesh feature path works (the non-obvious part)
 
@@ -103,8 +122,12 @@ embree ray casting, a compiled RANSAC scorer, skipping RANSAC on regions with no
 
 - Phase 1 (done): geometry core + CLI + tests against the bracket, NIST artifact, Benchy.
 - Phase 2 (done): spec → contracts, sandbox, provenance lint, MCP server, red-team harness,
-  adversarial review; end-to-end unattended demo passed. Not done: version diffing between runs.
-- Phase 3: reference-conditioned design (keep-in/keep-out volumes, clearance/fit tests, enclosure &
-  mount generators), spec support for slots/pockets/chamfers, coaxial/pattern grouping, fillet
-  rings, sphere/cone/torus fits, best-of-N generation with the verifier as judge.
+  adversarial review; end-to-end unattended demo passed.
+- Phase 3 (done, 0.3.0): references, keep-in/keep-out, fit contracts, enclosure & mount generators,
+  slots in specs and both feature paths, pattern grouping, best-of-N, version diff, sandbox limits.
+  Not done: pockets/chamfers as spec features, sphere/cone/torus fits, fillet rings, reference
+  features in `relations`, and — because the session ran on a fixed credit budget — the
+  independent adversarial review of Phase 3. **Next decision for Tucker:** run that review
+  (`docs/review-prompt.md`, modules reference/generators/diff/contracts/features-slots) before
+  building on Phase 3, or accept the ground-truth tests + red team as sufficient for now.
 - Phase 4: evaluation harness (CADGenBench, CADTestBench, own parts), docs, FreeCAD handoff polish.

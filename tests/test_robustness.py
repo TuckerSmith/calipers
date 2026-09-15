@@ -65,7 +65,7 @@ def test_coarse_tessellation_still_measures(tmp_path):
 
 
 def test_sphere_and_cone_are_not_mistaken_for_cylinders(tmp_path):
-    from build123d import BuildPart, Box, Cone, Sphere, export_stl
+    from build123d import Box, BuildPart, Cone, Sphere, export_stl
 
     with BuildPart() as bp:
         Box(40, 40, 10)

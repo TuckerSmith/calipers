@@ -523,7 +523,7 @@ def mesh_features(model: Model) -> dict:
     planes = [_finish_plane_group(g, exact=False) for g in groups]
     cylinders = merge_coaxial(cylinders)
     classify_cylinders(model, cylinders)
-    return _assemble(planes, cylinders, unclassified, exact=False, method="mesh_region_peel")
+    return _assemble(planes, cylinders, unclassified, exact=False, method="mesh_region_peel", model=model)
 
 
 # ----------------------------------------------------------------------------- plane grouping
@@ -620,7 +620,7 @@ def brep_features(model: Model) -> dict:
     planes = [_finish_plane_group(g, exact=True) for g in groups]
     cylinders = merge_coaxial(cylinders)
     classify_cylinders(model, cylinders)
-    return _assemble(planes, cylinders, unclassified, exact=True, method="brep_faces")
+    return _assemble(planes, cylinders, unclassified, exact=True, method="brep_faces", model=model)
 
 
 # ----------------------------------------------------------------------------- shared post-processing
@@ -787,7 +787,83 @@ def classify_cylinders(model: Model, cyls: list[Cylinder], azimuths: int = 4) ->
                 c.kind = "cylinder"
 
 
-def _assemble(planes: list[PlaneFeature], cyls: list[Cylinder], unclassified: list[dict], exact: bool, method: str) -> dict:
+def detect_slots(model: Model, cyls: list[Cylinder], ids: list[str]) -> list[dict]:
+    """Pair concave half-cylinders (≈180° coverage, same radius, parallel axes, facing away from each
+    other) into slots: width = end diameter, length = axis distance + width. Through/blind is decided by
+    probing the solid past each end at the slot centre, like holes."""
+    halves = [(i, c) for i, c in enumerate(cyls) if c.concave and 150.0 <= c.coverage_deg <= 210.0 and c.sample_points is not None]
+    used: set[int] = set()
+    slots: list[dict] = []
+
+    def outward(c: Cylinder) -> np.ndarray:  # in-plane direction from the axis towards the surface (the round end)
+        rel = c.sample_points.mean(axis=0) - c.axis_point
+        return unit(rel - (rel @ c.axis_dir) * c.axis_dir)
+
+    for i, a in halves:
+        if i in used:
+            continue
+        best = None
+        for j, b in halves:
+            if j <= i or j in used:
+                continue
+            if abs(a.radius - b.radius) > max(0.02, 0.01 * a.radius) or abs(float(a.axis_dir @ b.axis_dir)) < math.cos(math.radians(1.0)):
+                continue
+            rel = b.axis_point - a.axis_point
+            perp = rel - (rel @ a.axis_dir) * a.axis_dir
+            dist = float(np.linalg.norm(perp))
+            if dist < 0.5 * a.radius:
+                continue  # coaxial pieces, not two slot ends
+            lo_a, hi_a = sorted([float(a.start @ a.axis_dir), float(a.end @ a.axis_dir)])
+            lo_b, hi_b = sorted([float(b.start @ a.axis_dir), float(b.end @ a.axis_dir)])
+            overlap = min(hi_a, hi_b) - max(lo_a, lo_b)
+            if overlap < 0.5 * min(a.height, b.height):
+                continue
+            pd = perp / dist
+            if float(outward(a) @ pd) > -0.7 or float(outward(b) @ pd) < 0.7:
+                continue  # the round ends must face away from each other
+            if best is None or dist < best[0]:
+                best = (dist, j, b, pd, lo_a, hi_a, lo_b, hi_b)
+        if best is None:
+            continue
+        dist, j, b, pd, lo_a, hi_a, lo_b, hi_b = best
+        used.update({i, j})
+        d = a.axis_dir
+        lo, hi = min(lo_a, lo_b), max(hi_a, hi_b)
+        t_mid = 0.5 * (lo + hi)
+        base = a.axis_point - (float(a.axis_point @ d) - t_mid) * d
+        center = base + 0.5 * dist * pd
+        depth = hi - lo
+        delta = max(0.1, 0.02 * depth)
+        probes = np.array([center - d * (0.5 * depth + delta), center + d * (0.5 * depth + delta)])
+        ins = _probe_inside(model, probes)
+        if any(x is None for x in ins):
+            kind = "slot"
+        elif not ins[0] and not ins[1]:
+            kind = "through_slot"
+        elif ins[0] != ins[1]:
+            kind = "blind_slot"
+        else:
+            kind = "internal_slot"
+        slots.append(
+            {
+                "kind": kind,
+                "width": r(2 * a.radius),
+                "length": r(dist + 2 * a.radius),
+                "center": r(center),
+                "direction": r(canonical_dir(pd)),
+                "axis_dir": r(d),
+                "depth": r(depth),
+                "open_ends": [None if x is None else (not x) for x in ins],
+                "end_ids": [ids[i], ids[j]],
+                "exact": bool(a.exact and b.exact),
+                "fit_rms": r(max(a.fit_rms, b.fit_rms)),
+            }
+        )
+    slots.sort(key=lambda s: (s["width"], *s["center"]))
+    return [{"id": f"S{k + 1:02d}", **s} for k, s in enumerate(slots)]
+
+
+def _assemble(planes: list[PlaneFeature], cyls: list[Cylinder], unclassified: list[dict], exact: bool, method: str, model: Optional[Model] = None) -> dict:
     plane_out = []
     for i, p in enumerate(sorted(planes, key=lambda p: -p.area)):
         plane_out.append(
@@ -829,7 +905,7 @@ def _assemble(planes: list[PlaneFeature], cyls: list[Cylinder], unclassified: li
         )
     groups: dict[tuple, dict] = {}
     for e in cyl_out:
-        if e["kind"] in {"partial", "fillet_candidate"}:
+        if e["kind"] in {"partial", "fillet_candidate", "slot_end"}:
             continue
         key = (e["kind"], round(e["diameter"], 2), round(e["height"], 1))
         g = groups.setdefault(
@@ -839,22 +915,76 @@ def _assemble(planes: list[PlaneFeature], cyls: list[Cylinder], unclassified: li
         g["ids"].append(e["id"])
         g["axis_points"].append(e["axis_point"])
     unc_out = [{"id": f"R{i + 1:02d}", **{k: r(v) for k, v in u.items()}} for i, u in enumerate(sorted(unclassified, key=lambda u: -u["area"]))]
+    slots = detect_slots(model, full_first, [e["id"] for e in cyl_out]) if model is not None else []
+    for e in cyl_out:  # slot ends are accounted for: no longer loose partial cylinders
+        if any(e["id"] in s["end_ids"] for s in slots):
+            e["kind"] = "slot_end"
     return {
         "exact": exact,
         "method": method,
         "planes": plane_out,
         "cylinders": cyl_out,
         "cylinder_groups": sorted(groups.values(), key=lambda g: (-g["count"], g["diameter"])),
+        "slots": slots,
+        "patterns": detect_patterns(cyl_out),
         "unclassified_regions": unc_out,
         "counts": {
             "planes": len(plane_out),
             "cylinders": len(cyl_out),
             "holes": sum(1 for e in cyl_out if "hole" in e["kind"] or e["kind"] == "internal_bore"),
             "bosses_pins_shafts": sum(1 for e in cyl_out if e["kind"] in {"boss", "shaft", "cylinder"}),
-            "partial_cylinders": sum(1 for e in cyl_out if e["kind"] in {"partial", "fillet_candidate"}),
+            "partial_cylinders": sum(1 for e in cyl_out if e["kind"] in {"partial", "fillet_candidate", "slot_end"}),
+            "slots": len(slots),
             "unclassified_regions": len(unc_out),
         },
     }
+
+
+def detect_patterns(cyl_out: list[dict], tol: float = 0.05) -> list[dict]:
+    """Group same-kind, same-diameter, parallel features into circular / linear / grid patterns."""
+    out: list[dict] = []
+    full = [e for e in cyl_out if e["kind"] not in {"partial", "fillet_candidate", "slot_end"}]
+    by_key: dict[tuple, list[dict]] = {}
+    for e in full:
+        by_key.setdefault((e["kind"], round(e["diameter"], 2)), []).append(e)
+    for (kind, dia), members in by_key.items():
+        if len(members) < 3:
+            continue
+        d0 = np.asarray(members[0]["axis_dir"])
+        members = [m for m in members if abs(float(np.asarray(m["axis_dir"]) @ d0)) > 0.9995]
+        if len(members) < 3:
+            continue
+        from calipers.spec import inplane_basis
+
+        u, v = inplane_basis(d0)  # world axes when the feature axis is one, so grid rows/cols read naturally
+        P = np.array([[np.asarray(m["axis_point"]) @ u, np.asarray(m["axis_point"]) @ v] for m in members])
+        ids = [m["id"] for m in members]
+        ctr = P.mean(axis=0)
+        rad = np.linalg.norm(P - ctr, axis=1)
+        entry = {"kind": kind, "diameter": dia, "count": len(ids), "ids": ids, "axis_dir": members[0]["axis_dir"]}
+        if rad.max() - rad.min() <= tol and rad.mean() > tol:  # bolt circle: equal radius, equal angular pitch
+            ang = np.sort(np.degrees(np.arctan2(*(P - ctr)[:, ::-1].T)) % 360.0)
+            pitches = np.diff(np.concatenate([ang, [ang[0] + 360.0]]))
+            if pitches.max() - pitches.min() <= 0.5:
+                c3 = ctr[0] * u + ctr[1] * v + float(np.mean([np.asarray(m["axis_point"]) @ d0 for m in members])) * d0
+                out.append({**entry, "type": "circular", "center": r(c3), "pitch_radius": r(float(rad.mean())), "angular_pitch_deg": r(float(pitches.mean()), 2)})
+                continue
+        # linear: collinear with equal spacing
+        rel = P - P[0]
+        _, sv, vt = np.linalg.svd(rel, full_matrices=False)
+        if len(sv) > 1 and sv[1] <= tol * math.sqrt(len(P)):
+            t = np.sort(rel @ vt[0])
+            steps = np.diff(t)
+            if len(steps) and steps.max() - steps.min() <= tol and steps.min() > tol:
+                out.append({**entry, "type": "linear", "direction": r(canonical_dir(vt[0][0] * u + vt[0][1] * v)), "pitch": r(float(steps.mean()))})
+                continue
+        # grid: rows × cols on the two in-plane axes
+        xs, ys = np.unique(np.round(P[:, 0] / tol)) * tol, np.unique(np.round(P[:, 1] / tol)) * tol
+        if len(P) >= 4 and len(xs) * len(ys) == len(P) and len(xs) > 1 and len(ys) > 1:
+            px, py = np.diff(xs), np.diff(ys)
+            if (px.max() - px.min() <= tol) and (py.max() - py.min() <= tol):
+                out.append({**entry, "type": "grid", "rows": int(len(ys)), "cols": int(len(xs)), "pitch": [r(float(px.mean())), r(float(py.mean()))], "u": r(u), "v": r(v)})
+    return out
 
 
 def extract_features(model: Model) -> dict:

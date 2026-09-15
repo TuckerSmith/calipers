@@ -136,20 +136,22 @@ def test_api_help():
 
 @pytest.mark.anyio
 async def test_mcp_server_tools(bracket_files, tmp_path):
-    from mcp.shared.memory import create_connected_server_and_client_session
-
     from calipers.mcp_server import mcp
 
     spec_path = tmp_path / "spec.yaml"
     spec_path.write_text(BRACKET_SPEC)
-    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
-        tools = {t.name for t in (await client.list_tools()).tools}
-        assert {"report", "section", "verify", "run_code", "lint_provenance", "api_help", "redteam", "spec_schema"} <= tools
-        r = await client.call_tool("report", {"path": str(bracket_files["step"]), "symmetry": False})
-        assert "2× through_hole Ø5.000" in r.content[0].text
-        v = await client.call_tool("verify", {"path": str(bracket_files["stl"]), "spec_path": str(spec_path)})
-        assert "Contract check: PASS" in v.content[0].text
-        lint = await client.call_tool("lint_provenance", {"code": "PARAMS = {}\nx = Box(10, 20, 30)"})
-        assert "3 naked numbers" in lint.content[0].text
-        s = await client.call_tool("spec_schema", {})
-        assert "features:" in s.content[0].text
+
+    async def call(name, args):  # the server's own tool dispatch: works on mcp 1.x and 2.x
+        res = await mcp.call_tool(name, args)
+        if hasattr(res, "content"):
+            return res.content[0].text
+        if isinstance(res, tuple):  # mcp 1.x (content, structured)
+            res = res[0]
+        return res[0].text if isinstance(res, (list, tuple)) else str(res)
+
+    tools = {t.name for t in await mcp.list_tools()}
+    assert {"report", "section", "verify", "run_code", "lint_provenance", "api_help", "redteam", "spec_schema"} <= tools
+    assert "2× through_hole Ø5.000" in await call("report", {"path": str(bracket_files["step"]), "symmetry": False})
+    assert "Contract check: PASS" in await call("verify", {"path": str(bracket_files["stl"]), "spec_path": str(spec_path)})
+    assert "3 naked numbers" in await call("lint_provenance", {"code": "PARAMS = {}\nx = Box(10, 20, 30)"})
+    assert "features:" in await call("spec_schema", {})

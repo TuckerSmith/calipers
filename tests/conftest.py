@@ -24,7 +24,7 @@ BRACKET = {
 
 
 def build_bracket():
-    from build123d import Axis, BuildPart, BuildSketch, Box, Circle, Hole, Locations, extrude, fillet
+    from build123d import Axis, Box, BuildPart, BuildSketch, Circle, Hole, Locations, extrude, fillet
 
     L, W, T = BRACKET["plate"]
     with BuildPart() as bp:

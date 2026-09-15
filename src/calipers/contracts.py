@@ -130,7 +130,72 @@ def _match_features(spec_f: dict, cyls: list[dict], used: set[str]) -> list[tupl
     return out
 
 
-def verify(model: Model, spec: dict, features: Optional[dict] = None) -> VerifyResult:
+def _match_slots(spec_f: dict, slots: list[dict], used: set[str]) -> list[tuple[Optional[dict], Optional[np.ndarray]]]:
+    axis = np.asarray(spec_f["axis"], dtype=float)
+    cands = [s for s in slots if s["id"] not in used and abs(float(np.asarray(s["axis_dir"]) @ axis)) > 0.9995]
+    p3 = positions_3d(spec_f)
+    if p3 is not None:
+        targets: list[Optional[np.ndarray]] = list(p3)
+    elif "positions" in spec_f:
+        u, v = inplane_basis(axis)
+        targets = [np.asarray(p[0]) * u + np.asarray(p[1]) * v for p in spec_f["positions"]]
+    else:
+        targets = [None] * spec_f["count"]
+    if not cands:
+        return [(None, t) for t in targets]
+    cost = np.zeros((len(targets), len(cands)))
+    for i, t in enumerate(targets):
+        for j, c in enumerate(cands):
+            rel = np.asarray(c["center"]) - (t if t is not None else np.asarray(c["center"]))
+            if t is not None and p3 is None:
+                rel = rel - (rel @ axis) * axis
+            cost[i, j] = float(np.linalg.norm(rel)) + 1e-3 * abs(c["width"] - spec_f["width"][0])
+    from scipy.optimize import linear_sum_assignment
+
+    rows, cols = linear_sum_assignment(cost)
+    assigned = dict(zip(rows.tolist(), cols.tolist()))
+    out = []
+    for i, t in enumerate(targets):
+        if i in assigned:
+            c = cands[assigned[i]]
+            used.add(c["id"])
+            out.append((c, t))
+        else:
+            out.append((None, t))
+    return out
+
+
+def _slot_checks(f: dict, slots: list[dict], used: set[str], checks: list[Check]) -> None:
+    axis = np.asarray(f["axis"], dtype=float)
+    three_d = positions_3d(f) is not None
+    for i, (c, target) in enumerate(_match_slots(f, slots, used)):
+        ref = f"{f['id']}.{i}"
+        if c is None:
+            where = "" if target is None else f" near {np.round(target, 3).tolist()}"
+            checks.append(Check(f"{ref}.exists", f"slot '{f['id']}' #{i}{where}", False, "slot", None, note="no slot with this axis found"))
+            continue
+        checks.append(Check(f"{ref}.exists", f"slot '{f['id']}' #{i} found as {c['id']} ({c['kind']})", True, "slot", c["kind"]))
+        nom, tol = f["width"]
+        checks.append(_tol_check(f"{ref}.width", "slot width (end diameter)", nom, tol, c["width"], note="" if c["exact"] else f"fitted, rms {c['fit_rms']}"))
+        if "slot_length" in f:
+            nom, tol = f["slot_length"]
+            checks.append(_tol_check(f"{ref}.length", "slot overall length", nom, tol, c["length"]))
+        if "length" in f:
+            nom, tol = f["length"]
+            checks.append(_tol_check(f"{ref}.depth", "slot depth along the axis", nom, tol, c["depth"]))
+        ang = float(np.degrees(np.arccos(min(1.0, abs(float(np.asarray(c["direction"]) @ np.asarray(f["direction"])))))))
+        checks.append(Check(f"{ref}.direction", "slot long side direction", ang <= 0.5, np.round(f["direction"], 3).tolist(), c["direction"], deviation=ang, note="angle in degrees"))
+        if target is not None:
+            rel = np.asarray(c["center"]) - target
+            if not three_d:
+                rel = rel - (rel @ axis) * axis
+            d = float(np.linalg.norm(rel))
+            checks.append(Check(f"{ref}.position", "slot centre position", d <= f["pos_tol"] + 1e-9, f"within {f['pos_tol']} of {np.round(target, 3).tolist()}", c["center"], deviation=d))
+
+
+def verify(model: Model, spec: dict, features: Optional[dict] = None, references: Optional[dict] = None) -> VerifyResult:
+    """Check ``model`` against a normalized spec. ``references`` (id → Model) may be passed in when
+    the caller already loaded them; otherwise they are loaded from the spec."""
     res = VerifyResult()
     summ = measure.summary(model)
     feats = features if features is not None else extract_features(model)
@@ -172,9 +237,13 @@ def verify(model: Model, spec: dict, features: Optional[dict] = None) -> VerifyR
 
     # ---- features
     cyls = [c for c in feats["cylinders"] if c["kind"] in FULL_KINDS]
+    slots = feats.get("slots", [])
     used: set[str] = set()
     matched_by_ref: dict[str, dict] = {}
     for f in spec["features"]:
+        if f["kind"] == "slot":
+            _slot_checks(f, slots, used, checks)
+            continue
         pairs = _match_features(f, cyls, used)
         for i, (c, target) in enumerate(pairs):
             ref = f"{f['id']}.{i}"
@@ -209,7 +278,8 @@ def verify(model: Model, spec: dict, features: Optional[dict] = None) -> VerifyR
                 checks.append(Check(f"{ref}.entry", f"{desc} {f['entry']}axis", bool(ok), f["entry"], observed, note="" if ok else "feature enters from the wrong face"))
     if spec["exact_counts"]:
         extra = [f"{c['id']} {c['kind']} Ø{c['diameter']}" for c in cyls if c["id"] not in used]
-        checks.append(Check("features.exact_counts", "no cylindrical features beyond the spec", not extra, "none extra", extra or "none"))
+        extra += [f"{s['id']} {s['kind']} {s['width']}×{s['length']}" for s in slots if s["id"] not in used]
+        checks.append(Check("features.exact_counts", "no cylindrical features or slots beyond the spec", not extra, "none extra", extra or "none"))
 
     # ---- planes
     for p in spec["planes"]:
@@ -292,4 +362,50 @@ def verify(model: Model, spec: dict, features: Optional[dict] = None) -> VerifyR
         wt = measure.wall_thickness(model)
         mn = wt.get("p05")
         checks.append(Check("print.min_wall", "5th-percentile sampled wall thickness at least", mn is not None and mn >= pr["min_wall"], f">= {pr['min_wall']}", mn, note="sampled ray casting"))
+
+    # ---- references: keep-out / keep-in regions and fit against imported parts
+    if spec.get("references") or spec.get("keep_out") or spec.get("keep_in"):
+        from calipers import reference as refmod
+
+        refs = dict(references or {})
+        for rf in spec.get("references", []):
+            if rf["id"] not in refs:
+                refs[rf["id"]] = refmod.load_reference(rf, spec.get("_base_dir"))
+        for mode in ("keep_out", "keep_in"):
+            for reg in spec.get(mode, []):
+                got = refmod.region_intrusion(model, reg, refs, mode)
+                vol, bad = got.get("volume"), got.get("vertices_violating")
+                ok = (vol is not None and vol <= refmod.VOLUME_TOL) or (vol is None and bad == 0)
+                what = "no material inside keep-out" if mode == "keep_out" else "all material inside keep-in"
+                measured = f"{vol} mm³" if vol is not None else f"{bad} vertices outside" if bad is not None else got.get("error")
+                checks.append(Check(f"{mode}.{reg['id']}", f"{what} '{reg['id']}' ({refmod.describe_region(reg, refs)})", bool(ok), "0 mm³", measured, deviation=vol, note="exact boolean" if got.get("exact") else "mesh boolean"))
+        for i, f in enumerate(spec.get("fit", [])):
+            ref = refs[f["ref"]]
+            cid = f"fit.{i}.{f['type']}"
+            if f["type"] == "clearance":
+                c = refmod.clearance(model, ref)
+                ov = refmod.overlaps(c)
+                measured = f"{c['overlap_volume']} mm³" if c.get("overlap_volume") is not None else f"{c.get('reference_points_inside_part', '?')} reference points inside the part"
+                checks.append(Check(f"{cid}.no_overlap", f"part and reference '{f['ref']}' do not intersect", not ov, "no overlap", measured, note="exact" if c.get("exact") else "sampled"))
+                md = c["min_distance"]
+                req = f">= {f['min']}" + (f" and <= {f['max']}" if "max" in f else "")
+                ok = (not ov) and md >= f["min"] - 1e-6 and ("max" not in f or md <= f["max"] + 1e-6)
+                dev = md - f["min"] if md < f["min"] else (md - f["max"] if "max" in f and md > f["max"] else 0.0)
+                checks.append(Check(f"{cid}.min_distance", f"closest approach between the part and reference '{f['ref']}'", bool(ok), req, md, deviation=dev, note="exact" if c.get("exact") else "sampled"))
+            elif f["type"] == "gap":
+                names = list(f["directions"].keys())
+                gaps = refmod.directional_gaps(model, ref, [refmod.direction_vector(n) for n in names])
+                for name, g in zip(names, gaps):
+                    lo, hi = f["directions"][name]
+                    if g["min"] is None or g["hit_fraction"] < 0.5:
+                        checks.append(Check(f"{cid}.{name}", f"gap from reference '{f['ref']}' to the nearest part wall toward {name}", False, f"[{lo}, {hi}]", None if g["min"] is None else g["min"], note=f"only {g['hit_fraction']:.0%} of the reference surface facing {name} sees part material: nothing constrains it there"))
+                        continue
+                    ok = lo - 1e-6 <= g["min"] <= hi + 1e-6
+                    dev = g["min"] - lo if g["min"] < lo else (g["min"] - hi if g["min"] > hi else 0.0)
+                    checks.append(Check(f"{cid}.{name}", f"gap from reference '{f['ref']}' to the nearest part wall toward {name}", bool(ok), f"[{lo}, {hi}]", g["min"], deviation=dev, note=f"sampled {g['n_rays']} rays; median gap {g['p50']}, {g['hit_fraction']:.0%} hit"))
+            else:
+                cov = refmod.enclosure_coverage(model, ref, [refmod.direction_vector(o) for o in f["open"]], f["max_distance"])
+                frac = cov.get("fraction")
+                ok = frac is not None and frac >= f["min_fraction"] - 1e-9
+                checks.append(Check(f"{cid}", f"fraction of reference '{f['ref']}' surface covered by the part (open: {f['open'] or 'none'})", bool(ok), f">= {f['min_fraction']}", frac, deviation=None if frac is None else frac - f["min_fraction"], note=f"sampled {cov.get('n_rays')} rays within {f['max_distance']} mm"))
     return res

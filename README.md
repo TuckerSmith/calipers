@@ -46,6 +46,10 @@ python -m pytest -q                # ≈4 min; NIST AM test artifact, 3DBenchy, 
 | `calipers section FILE -p z=12 [--png sec.png]` | cross-section loops with circle / rectangle fits (exact OCCT loops for STEP) |
 | `calipers render FILE -o dir [--views iso,front,top,right]` | shaded orthographic PNGs; hidden-line SVG/PNG for STEP |
 | `calipers export FILE out.step\|.stl\|.3mf\|.obj` | format conversion (mesh → B-rep is refused: that is reconstruction) |
+| `calipers verify FILE spec.yaml` / `calipers run part.py --spec spec.yaml` | contracts against a model / execute + lint + report + verify a script |
+| `calipers generate enclosure\|mount --ref device.stl -o out/` | sourced script + spec around a reference, then the verify loop |
+| `calipers best a.py b.py c.py --spec spec.yaml` | best-of-N: rank candidate scripts by the verifier |
+| `calipers diff a.step b.step` | what changed between two revisions (kernel-exact for STEP) |
 
 Python: `from calipers import load, build_report`; `rep = build_report(load("part.step"), sections=["z=0"])`;
 `rep.to_text()` for the digest, `rep.to_dict()` / `rep.to_json()` for the data.
@@ -100,17 +104,43 @@ a build123d signature.
 **MCP:** `pip install -e .` then add `{"mcpServers": {"calipers": {"command": "calipers-mcp"}}}` to
 Claude Desktop's config (or `claude mcp add calipers -- calipers-mcp` for Claude Code). Tools:
 `report`, `report_json`, `section`, `measure_distance`, `render`, `spec_schema`, `verify`,
-`lint_provenance`, `run_code`, `export`, `api_help`, `redteam`.
+`lint_provenance`, `run_code`, `run_candidates`, `diff`, `reference_summary`, `generate`, `export`,
+`api_help`, `redteam`.
 
 **Red team:** `calipers redteam --n 50 --seed 0 --out scoreboard.json` builds random parts with
 known ground truth and scores both feature paths; every failing seed is reproducible with `--keep`.
 See `docs/testing-and-review.md` for the whole process.
 
+## Design around a reference (Phase 3)
+
+Put the existing part in the spec and state how the new one must relate to it. Nothing about the
+reference is typed by hand — the verifier loads it, places it and measures:
+
+```yaml
+references: [{id: device, path: device.stl, place: {rotate: [0, 0, 0], translate: [0, 0, 0]}}]
+keep_out:  [{id: usb, from: device, face: "+x", depth: 20, pad: 1}]     # a cable needs this volume
+fit:
+  - {type: clearance, ref: device, min: 0.3}                              # no overlap, ≥ 0.3 everywhere
+  - {type: gap, ref: device, directions: {"+x": [0.3, 1.0], "-z": [0, 0.5]}}   # held, not rattling
+  - {type: enclosed, ref: device, min_fraction: 0.85, open: ["+z"]}
+```
+
+`calipers generate enclosure --ref device.stl --wall 2 --clearance 0.5 --open +z -o out/` writes a
+build123d script whose numbers cite the reference (`measured:device.bbox_max.z`) and the spec above,
+then runs it; `generate mount` puts standoffs at the reference's measured through holes.
+`examples/benchy_enclosure` is the 3DBenchy (an organic, non-watertight mesh) in a printed enclosure:
+generated and verified with no human in the loop, 16/16 contracts.
+
+| ![Benchy inside the generated enclosure](docs/images/benchy_in_enclosure_iso.png) | ![Section at y=0](docs/images/benchy_section_y0.png) |
+|---|---|
+| ![Board on the generated mount](docs/images/board_on_mount_iso.png) | ![Section through a standoff](docs/images/mount_section_x-22.png) | Specs also take `kind: slot`
+features, and the report groups grids / lines / bolt circles of identical features.
+
 ## Roadmap
 
-Phase 3 adds design around a reference object (keep-in / keep-out volumes, clearance tests,
-enclosure and mount generators), spec support for slots and pockets, and best-of-N generation with
-the verifier as judge. `docs/approach-v0.1.md` has the reasoning and the alternatives considered.
+Phase 4: evaluation harness (CADGenBench, CADTestBench, own parts), pockets/chamfers as spec
+features, sphere/cone/torus fits, FreeCAD handoff polish. `docs/approach-v0.1.md` has the reasoning
+and the alternatives considered.
 
 ## Test fixtures
 

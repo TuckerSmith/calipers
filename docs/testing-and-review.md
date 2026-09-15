@@ -43,6 +43,19 @@ provenance lint (`calipers/provenance.py`) rejects any dimension the author did 
 and never lies. This is the teacher/student split applied to design: the kernel teaches, the model
 learns per iteration.
 
+### 4b. Fit contracts against a reference (Phase 3)
+
+When the spec names a reference, the checks are between two bodies. For STEP vs STEP the overlap
+volume and the closest approach come from the kernel (exact). For meshes — scans are meshes — the
+verifier samples the reference surface (vertices + area-uniform points), tests them against the
+closed generated part (any reference point inside the part is an overlap, whatever the scan's
+topology), and casts rays per direction to find the nearest wall; the *minimum* over samples is the
+gap, so a single high spot is enough to fail. Keep-out / keep-in regions are solids intersected
+with the part (OCCT for B-reps, manifold for meshes). `tests/test_phase3.py` builds a device, an
+enclosure with a known clearance and a keep-out box that overlaps a wall by exactly 1 mm, and
+asserts the volumes and gaps from the construction numbers; `examples/benchy_enclosure` is the
+unattended end-to-end case.
+
 ## 5. Independent adversarial review (a script, not a vibe)
 
 After each phase, a separate agent — with no stake in the code — is given the modules and this

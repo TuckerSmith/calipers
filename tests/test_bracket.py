@@ -6,8 +6,7 @@ import math
 
 import pytest
 
-from calipers import build_report, load
-from calipers import measure
+from calipers import build_report, load, measure
 from tests.conftest import BRACKET
 
 L, W, T = BRACKET["plate"]

@@ -14,7 +14,10 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
+try:  # mcp >= 2: FastMCP was renamed MCPServer
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:  # pragma: no cover - mcp 1.x
+    from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(
     "calipers",
@@ -23,7 +26,10 @@ mcp = FastMCP(
         "1) write the requirements as a spec (see spec_schema); 2) write build123d code whose dimensions are all "
         "declared in a PARAMS dict with sources; 3) run_code with the spec — read the contract failures and the "
         "provenance lint, repair, repeat until everything passes; 4) export. To understand an existing model, "
-        "call report first, then section/features for detail."
+        "call report first, then section/features for detail. To design around an existing part (an enclosure, "
+        "a mount): call reference_summary/report on it, add it to the spec as a reference with keep_out/fit "
+        "contracts (see spec_schema), or start from generate(kind=...) and refine. run_candidates ranks several "
+        "attempts; diff shows what changed between two revisions."
     ),
 )
 
@@ -128,6 +134,86 @@ def run_code(code: str, spec_path: Optional[str] = None, workdir: Optional[str] 
     txt = res.to_text()
     if res.renders:
         txt += "\n\nRenders:\n" + "\n".join(res.renders)
+    return txt
+
+
+@mcp.tool()
+def run_candidates(codes: list[str], spec_path: Optional[str] = None, workdir: Optional[str] = None, workers: int = 4) -> str:
+    """Best-of-N: run several candidate build123d scripts in parallel, verify each against the spec and
+    rank them (fewest failed contracts, smallest deviations). Returns the ranking and the best
+    candidate's full output. Generate 3–5 different attempts, then repair the best one."""
+    from calipers.sandbox import candidates_text
+    from calipers.sandbox import run_candidates as _rc
+    from calipers.spec import load_spec
+
+    ranked = _rc(codes, spec=load_spec(spec_path) if spec_path else None, workdir=workdir, workers=workers)
+    return candidates_text(ranked) + "\n\n" + ranked[0][1].to_text()
+
+
+@mcp.tool()
+def diff(path_a: str, path_b: str) -> str:
+    """What changed between two model files (two revisions of a part): extents, volume, planes,
+    cylindrical features and slots matched and compared; kernel-exact material added/removed for STEP."""
+    from calipers.diff import diff_models, diff_text
+
+    return diff_text(diff_models(_load(path_a), _load(path_b)))
+
+
+@mcp.tool()
+def reference_summary(path: str, rotate: Optional[list[float]] = None, translate: Optional[list[float]] = None) -> str:
+    """Envelope of a reference model after optional placement (rotate about x,y,z in degrees, then
+    translate): bbox_min/bbox_max/extents/center — the numbers to cite as measured:<id>.bbox_max.z etc."""
+    from calipers.reference import load_reference
+    from calipers.reference import reference_summary as _rs
+
+    rf = {"id": Path(path).stem, "path": path}
+    if rotate or translate:
+        rf["place"] = {"rotate": rotate or [0, 0, 0], "translate": translate or [0, 0, 0]}
+    return json.dumps(_rs(load_reference(rf)), indent=1)
+
+
+@mcp.tool()
+def generate(
+    kind: str,
+    reference_path: str,
+    out_dir: str,
+    ref_id: Optional[str] = None,
+    wall: float = 2.0,
+    clearance: float = 0.5,
+    floor: Optional[float] = None,
+    open_face: str = "+z",
+    corner_radius: float = 0.0,
+    plate_t: float = 3.0,
+    standoff_h: float = 5.0,
+    standoff_wall: float = 2.0,
+    screw_d: Optional[float] = None,
+    margin: float = 3.0,
+    hole_diameter: Optional[float] = None,
+    rotate: Optional[list[float]] = None,
+    translate: Optional[list[float]] = None,
+    run: bool = True,
+) -> str:
+    """Generate a sourced build123d script and a spec with fit contracts for a part designed around a
+    reference model — kind "enclosure" (open-faced box: wall, clearance, floor, open_face, corner_radius)
+    or "mount" (plate with standoffs at the reference's through holes: plate_t, standoff_h, standoff_wall,
+    screw_d, margin, hole_diameter). Writes part.py and spec.yaml to out_dir; with run=True also
+    executes and verifies them. Edit part.py afterwards and re-run run_code with the spec."""
+    from calipers import generators
+
+    place = {"rotate": rotate or [0, 0, 0], "translate": translate or [0, 0, 0]} if (rotate or translate) else None
+    if kind == "enclosure":
+        res = generators.enclosure(reference_path, ref_id, wall=wall, clearance=clearance, floor=floor, open_face=open_face, corner_radius=corner_radius, place=place, out_dir=out_dir)
+    elif kind == "mount":
+        res = generators.mount(reference_path, ref_id, plate_t=plate_t, standoff_h=standoff_h, standoff_wall=standoff_wall, screw_d=screw_d, margin=margin, hole_diameter=hole_diameter, place=place, out_dir=out_dir)
+    else:
+        return "kind must be 'enclosure' or 'mount'"
+    txt = f"wrote {res['paths']['code']} and {res['paths']['spec']}\n\n{res['code']}\n\n---- spec.yaml ----\n{res['spec']}"
+    if run:
+        from calipers.sandbox import run_code as _run
+        from calipers.spec import load_spec
+
+        rr = _run(res["code"], workdir=str(Path(out_dir) / "run"), spec=load_spec(res["paths"]["spec"]))
+        txt += "\n\n" + rr.to_text()
     return txt
 
 
